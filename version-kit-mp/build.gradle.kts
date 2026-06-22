@@ -1,9 +1,12 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.maven.publish)
 }
 
 kotlin {
@@ -67,5 +70,32 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, automaticRelease = true)
+    // Sign all publications (REQUIRED for the real Maven Central release). Signing is only
+    // wired in when a GPG key is configured (signingInMemoryKey / signing.keyId properties),
+    // so `publishToMavenLocal` works without keys while the Central release stays signed.
+    val hasSigningKey = providers.gradleProperty("signingInMemoryKey").isPresent ||
+        providers.gradleProperty("signing.keyId").isPresent ||
+        providers.environmentVariable("ORG_GRADLE_PROJECT_signingInMemoryKey").isPresent
+    if (hasSigningKey) {
+        signAllPublications()
+    }
+    // Coordinates come from gradle.properties (GROUP / POM_ARTIFACT_ID / VERSION_NAME).
+    // Re-declaring them here conflicts with those final values, so they are intentionally omitted.
+    pom {
+        name.set("POS Version Kit (KMP)")
+        description.set("Kotlin Multiplatform version check, download and install for VTcode POS (Android + Desktop).")
+        url.set("https://github.com/dungpham259dev/pos-version-kit-kmp")
+        licenses { license { name.set("Proprietary — VTcode") } }
+        developers { developer { id.set("vtcode"); name.set("VTcode") } }
+        scm {
+            url.set("https://github.com/dungpham259dev/pos-version-kit-kmp")
+            connection.set("scm:git:git://github.com/dungpham259dev/pos-version-kit-kmp.git")
+            developerConnection.set("scm:git:ssh://git@github.com/dungpham259dev/pos-version-kit-kmp.git")
+        }
     }
 }
