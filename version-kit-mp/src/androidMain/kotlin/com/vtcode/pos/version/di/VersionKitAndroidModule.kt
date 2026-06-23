@@ -8,6 +8,6 @@ import org.koin.core.module.Module
 import org.koin.dsl.module
 
 fun versionKitAndroidModule(): Module = module {
-    single<HttpClientEngine> { OkHttp.create() }
+    single<HttpClientEngine>(VersionKitQualifier) { OkHttp.create() }
     single { VersionInstaller(androidContext()) }
 }

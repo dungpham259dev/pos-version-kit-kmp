@@ -7,6 +7,6 @@ import org.koin.core.module.Module
 import org.koin.dsl.module
 
 fun versionKitDesktopModule(): Module = module {
-    single<HttpClientEngine> { CIO.create() }
+    single<HttpClientEngine>(VersionKitQualifier) { CIO.create() }
     single { VersionInstaller() }
 }
