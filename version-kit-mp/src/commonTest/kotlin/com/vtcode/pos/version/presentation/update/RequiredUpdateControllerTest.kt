@@ -8,9 +8,12 @@ import com.vtcode.pos.version.fake.FakeInstaller
 import com.vtcode.pos.version.fake.FakeVersionRepository
 import com.vtcode.pos.version.fake.testUpdate
 import com.vtcode.pos.version.fake.testVersionChecker
+import com.vtcode.pos.version.presentation.install.InstallOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -61,7 +64,8 @@ class RequiredUpdateControllerTest {
         repository: FakeVersionRepository,
         installer: FakeInstaller = FakeInstaller(),
         fileSystem: FakeFileSystem = FakeFileSystem(),
-        autoInstall: Boolean = true
+        autoInstall: Boolean = true,
+        installOutcomes: Flow<InstallOutcome> = MutableSharedFlow()
     ): RequiredUpdateController {
         fileSystem.createDirectories(cacheDir)
         return RequiredUpdateController(
@@ -71,7 +75,8 @@ class RequiredUpdateControllerTest {
             cacheDir = cacheDir,
             softwareCode = "ipos",
             fileSystem = fileSystem,
-            autoInstall = autoInstall
+            autoInstall = autoInstall,
+            installOutcomes = installOutcomes
         )
     }
 
@@ -315,5 +320,93 @@ class RequiredUpdateControllerTest {
             it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
         }
         assertEquals(1, repository.downloadCount)
+    }
+
+    @Test
+    fun install_permission_error_yields_InstallPermissionRequired() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller(result = Result.Error(VersionError.InstallPermissionRequired))
+        val sut = controller(backgroundScope, repository, installer)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage == UpdateStage.InstallPermissionRequired
+        }
+        assertEquals(0, installer.permissionRequests)
+
+        assertTrue(sut.requestInstallPermission())
+        assertEquals(1, installer.permissionRequests)
+    }
+
+    @Test
+    fun retry_after_permission_required_installs_again() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller(result = Result.Error(VersionError.InstallPermissionRequired))
+        val sut = controller(backgroundScope, repository, installer)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage == UpdateStage.InstallPermissionRequired
+        }
+
+        installer.result = Result.Success(Unit)
+        sut.retry()
+
+        sut.awaitStateAfterDownloadOrInstall { it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing }
+        assertEquals(2, installer.installed.size)
+    }
+
+    @Test
+    fun install_error_yields_Failed_stage() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller(result = Result.Error(VersionError.InstallError("signature mismatch")))
+        val sut = controller(backgroundScope, repository, installer)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        val state = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertTrue((state.stage as UpdateStage.Failed).message.contains("signature mismatch"))
+    }
+
+    @Test
+    fun platform_install_failure_yields_Failed_stage() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val outcomes = MutableSharedFlow<InstallOutcome>(extraBufferCapacity = 1)
+        val sut = controller(backgroundScope, repository, installOutcomes = outcomes)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall { it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing }
+
+        outcomes.emit(InstallOutcome.Failure("Người dùng đã huỷ"))
+
+        val state = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals("Người dùng đã huỷ", (state.stage as UpdateStage.Failed).message)
+    }
+
+    @Test
+    fun platform_install_failure_without_message_uses_default_text() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val outcomes = MutableSharedFlow<InstallOutcome>(extraBufferCapacity = 1)
+        val sut = controller(backgroundScope, repository, installOutcomes = outcomes)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall { it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing }
+
+        outcomes.emit(InstallOutcome.Failure(null))
+
+        val state = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals("Cài đặt thất bại", (state.stage as UpdateStage.Failed).message)
     }
 }

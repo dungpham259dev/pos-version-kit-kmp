@@ -6,11 +6,14 @@ import com.vtcode.pos.version.domain.error.VersionError
 import com.vtcode.pos.version.domain.usecase.DownloadProgress
 import com.vtcode.pos.version.domain.usecase.DownloadProgressTracker
 import com.vtcode.pos.version.presentation.VersionChecker
+import com.vtcode.pos.version.presentation.install.InstallOutcome
+import com.vtcode.pos.version.presentation.install.platformInstallOutcomes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,15 +33,35 @@ import okio.Path
  * không ảnh hưởng tới các coroutine khác đang chạy trên [scope] của host. Gọi [close] khi
  * không dùng nữa.
  */
-class RequiredUpdateController(
+class RequiredUpdateController internal constructor(
     private val scope: CoroutineScope,
     private val versionChecker: VersionChecker,
     private val currentVersion: String,
     private val cacheDir: Path,
     softwareCode: String? = null,
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
-    private val autoInstall: Boolean = true
+    private val autoInstall: Boolean = true,
+    private val installOutcomes: Flow<InstallOutcome>
 ) {
+
+    constructor(
+        scope: CoroutineScope,
+        versionChecker: VersionChecker,
+        currentVersion: String,
+        cacheDir: Path,
+        softwareCode: String? = null,
+        fileSystem: FileSystem = FileSystem.SYSTEM,
+        autoInstall: Boolean = true
+    ) : this(
+        scope = scope,
+        versionChecker = versionChecker,
+        currentVersion = currentVersion,
+        cacheDir = cacheDir,
+        softwareCode = softwareCode,
+        fileSystem = fileSystem,
+        autoInstall = autoInstall,
+        installOutcomes = platformInstallOutcomes
+    )
 
     private val softwareCode: String = softwareCode
         ?: versionChecker.defaultSoftwareCode
@@ -56,6 +79,28 @@ class RequiredUpdateController(
 
     init {
         check()
+        observeInstallOutcomes()
+    }
+
+    /**
+     * Android trả kết quả cài đặt bất đồng bộ qua broadcast sau khi dialog hệ thống đóng.
+     * Không nghe thì stage kẹt ở [UpdateStage.Installing] khi người dùng bấm Huỷ.
+     */
+    private fun observeInstallOutcomes() {
+        controllerScope.launch {
+            installOutcomes.collect { outcome ->
+                when (outcome) {
+                    // Tiến trình sắp bị thay thế; giữ nguyên Installing.
+                    is InstallOutcome.Success -> Unit
+
+                    is InstallOutcome.Failure -> setStage(
+                        UpdateStage.Failed(
+                            outcome.message?.takeIf { it.isNotBlank() } ?: "Cài đặt thất bại"
+                        )
+                    )
+                }
+            }
+        }
     }
 
     fun check() {
