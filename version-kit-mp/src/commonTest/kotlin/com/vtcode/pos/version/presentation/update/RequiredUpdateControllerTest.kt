@@ -378,6 +378,7 @@ class RequiredUpdateControllerTest {
         sut.retry()
 
         sut.awaitStateAfterDownloadOrInstall { it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing }
+        awaitCondition { installer.installed.size == 2 }
         assertEquals(2, installer.installed.size)
     }
 
