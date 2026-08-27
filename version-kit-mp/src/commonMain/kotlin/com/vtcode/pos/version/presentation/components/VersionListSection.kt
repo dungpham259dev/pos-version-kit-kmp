@@ -184,6 +184,11 @@ internal class VersionListController(
                     }
 
                     is InstallOutcome.Failure -> {
+                        // InstallOutcome đến từ InstallEventBus toàn tiến trình, không mang
+                        // token liên kết với lượt cài cụ thể — bỏ qua nếu controller này
+                        // không có lượt cài nào đang chờ kết quả (ví dụ outcome đến từ
+                        // RequiredUpdateController), tránh dừng nhầm hoặc báo lỗi sai chỗ.
+                        if (_installingFile.value == null) return@collect
                         _installingFile.value = null
                         val message = outcome.message?.takeIf { it.isNotBlank() }
                             ?: "Cài đặt thất bại"
