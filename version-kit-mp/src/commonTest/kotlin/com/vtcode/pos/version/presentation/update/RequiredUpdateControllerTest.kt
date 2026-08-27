@@ -11,6 +11,7 @@ import com.vtcode.pos.version.fake.testVersionChecker
 import com.vtcode.pos.version.presentation.install.InstallOutcome
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -82,6 +83,47 @@ private class DelayedDownloadVersionRepository(
         delay(delayMs)
         return delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
     }
+}
+
+/**
+ * Tái hiện đúng lỗi mà B1 đã sửa ở tầng data (`VersionRemoteDataSource`): công việc thật bên
+ * trong (`delay` + gọi `delegate`) chạy trong `withContext(NonCancellable)`, nên bị `check()`
+ * khác huỷ giữa chừng cũng KHÔNG dừng lại — nó vẫn tự chạy tới cùng theo lịch ảo của chính nó,
+ * độc lập với thời điểm bị huỷ, y hệt một cuộc gọi mạng thật đã gửi đi rồi thì huỷ Job phía
+ * caller cũng không rút lại được request. Khi `withContext` trả kết quả về cho coroutine cha
+ * đã bị huỷ, lần resume đó tự ném `CancellationException` (cancellation "nhanh" tiêu chuẩn của
+ * kotlinx.coroutines) — và `catch (e: Exception)` ở đây nuốt luôn ngoại lệ đó, trả về
+ * `Result.Error` như một lỗi mạng bình thường thay vì để nó truyền tiếp.
+ *
+ * Nhờ vậy, lượt `check()` cũ dù đã bị huỷ vẫn "sống sót" tới tận dòng `_state.value = ...` và
+ * `scheduleRecheck()` ở `RequiredUpdateController`, cho bài test bên dưới kiểm chứng lớp
+ * phòng vệ thứ hai của controller (`isActive` guard + huỷ `recheckJob` cũ trong
+ * `scheduleRecheck()`) — lớp phòng vệ đúng ra không bao giờ cần tới nếu tầng data luôn hợp
+ * tác đúng, nhưng vẫn phải đúng ngay cả khi không.
+ */
+private class DelayedCheckVersionRepository(
+    private val delegate: FakeVersionRepository,
+    private val delayMs: Long = 1_000
+) : IVersionRepository {
+
+    override suspend fun checkForUpdate(
+        softwareCode: String,
+        currentVersion: String
+    ): Result<List<UpdateInfo>, VersionError> = try {
+        withContext(NonCancellable) {
+            delay(delayMs)
+            delegate.checkForUpdate(softwareCode, currentVersion)
+        }
+    } catch (e: Exception) {
+        Result.Error(VersionError.NetworkError(e.message ?: "cancelled"))
+    }
+
+    override suspend fun downloadFileWithProgress(
+        fileId: String,
+        destinationDir: Path,
+        fileSystem: FileSystem,
+        onProgress: (Int, Long, Long) -> Unit
+    ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
 }
 
 class RequiredUpdateControllerTest {
@@ -286,6 +328,66 @@ class RequiredUpdateControllerTest {
         assertEquals(2, repository.checkCount)
     }
 
+    /**
+     * `check()` từ `init()` còn dở dang (mắc kẹt tại `delay()` bên trong
+     * [DelayedCheckVersionRepository]) khi ta gọi `check()` lần nữa — mô phỏng "gọi check()
+     * trong khi một lượt check khác đang chạy". Lượt cũ dù bị huỷ vẫn tự chạy xong theo lịch
+     * ảo riêng của nó (xem KDoc của [DelayedCheckVersionRepository]) và có thể tự đặt thêm
+     * một timer hỏi lại mồ côi nếu `check()`/`scheduleRecheck()` không tự phòng vệ (`isActive`
+     * guard, huỷ `recheckJob` cũ trước khi gán job mới) — hai timer sống song song sẽ khiến
+     * `checkCount` tăng nhanh hơn tốc độ một-timer-mỗi-`recheckIntervalMs` mong đợi.
+     */
+    @Test
+    fun check_call_while_check_in_flight_does_not_stack_recheck_timers() = runTest(UnconfinedTestDispatcher()) {
+        val recheckInterval = 15 * 60 * 1000L
+        val checkDelay = 1_000L
+        val repository = FakeVersionRepository(checkError = VersionError.TimeoutError)
+        val fileSystem = FakeFileSystem()
+        fileSystem.createDirectories(cacheDir)
+        val sut = RequiredUpdateController(
+            scope = backgroundScope,
+            versionChecker = testVersionChecker(
+                DelayedCheckVersionRepository(repository, checkDelay),
+                FakeInstaller()
+            ),
+            currentVersion = "1.0.0",
+            cacheDir = cacheDir,
+            softwareCode = "ipos",
+            fileSystem = fileSystem,
+            recheckIntervalMs = recheckInterval
+        )
+
+        // check() từ init() còn "treo" trong delay() ảo bên trong withContext(NonCancellable),
+        // chưa chạm tới repository thật — đây chính là "gọi check() trong khi một lượt check
+        // khác đang chạy".
+        assertEquals(0, repository.checkCount)
+        sut.check()
+        assertEquals(0, repository.checkCount)
+
+        // Cả lượt bị huỷ lẫn lượt mới đều "treo" trong delay() riêng của chính chúng; tua qua
+        // để cả hai cùng chạm tới repository — lượt bị huỷ (NonCancellable) vẫn hoàn tất bình
+        // thường rồi mới nuốt CancellationException khi resume về coroutine cha đã bị huỷ.
+        advanceTimeBy(checkDelay + 1)
+        runCurrent()
+
+        assertIs<RequiredUpdateState.CheckFailed>(sut.state.value)
+        assertEquals(2, repository.checkCount)
+
+        // Mỗi chu kỳ check() thật (kể cả các lần hỏi lại) đều đi qua checkDelay của
+        // DelayedCheckVersionRepository, nên đệm thêm dư dả để chắc chắn đúng hai lượt hỏi
+        // lại (mỗi lượt cộng thêm checkDelay) hoàn tất trong cửa sổ đã tua qua.
+        advanceTimeBy(recheckInterval * 2 + 5_000)
+        runCurrent()
+
+        assertEquals(
+            4,
+            repository.checkCount,
+            "Chỉ đúng một timer hỏi lại được sống sót sau chu kỳ check() chồng lấn: " +
+                "2 lần check ban đầu (lượt bị huỷ vẫn hoàn tất do NonCancellable + lượt mới) " +
+                "+ đúng 2 lần hỏi lại trong khoảng thời gian đã trôi qua"
+        )
+    }
+
     @Test
     fun recheckIntervalMs_null_performs_exactly_one_check() = runTest(UnconfinedTestDispatcher()) {
         val repository = FakeVersionRepository(checkError = VersionError.TimeoutError)
@@ -443,7 +545,8 @@ class RequiredUpdateControllerTest {
         sut.install()
         sut.install()
 
-        awaitCondition { installer.installed.isNotEmpty() }
+        val installedTwice = awaitConditionOrTimeout { installer.installed.size > 1 }
+        assertTrue(!installedTwice, "Lệnh install() thứ hai trong lúc đang cài không được thực thi")
         assertEquals(1, installer.installed.size)
     }
 

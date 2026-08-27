@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okio.FileSystem
@@ -156,7 +157,12 @@ class RequiredUpdateController internal constructor(
         recheckJob = null
         checkJob = controllerScope.launch {
             _state.value = RequiredUpdateState.Checking
-            when (val result = versionChecker.check(softwareCode, currentVersion)) {
+            val result = versionChecker.check(softwareCode, currentVersion)
+            // Phòng vệ kép: nếu job này đã bị check()/close() khác huỷ trong lúc chờ server
+            // (và, vì lý do nào đó, CancellationException không tự dừng coroutine tại đây),
+            // không được ghi state hay đặt lịch hỏi lại thay cho chu kỳ đã thay thế nó.
+            if (!coroutineContext.isActive) return@launch
+            when (result) {
                 is Result.Success -> {
                     val required = result.value.requiredUpdate()
                     _state.value = if (required == null) {
@@ -186,6 +192,9 @@ class RequiredUpdateController internal constructor(
             is RequiredUpdateState.NotRequired, is RequiredUpdateState.CheckFailed -> Unit
             else -> return
         }
+        // Phòng vệ kép: không bao giờ để hai timer sống song song dù lời gọi tới đây có
+        // lặp lại ngoài dự kiến.
+        recheckJob?.cancel()
         recheckJob = controllerScope.launch {
             delay(interval)
             recheckJob = null
