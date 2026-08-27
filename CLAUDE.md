@@ -44,7 +44,9 @@ di/          versionKitModule() + platform modules
 - `versionKitModule(VersionKitConfig)` + `versionKitAndroidModule()` / `versionKitDesktopModule()`
 - `VersionChecker` — the facade: `check()`, `downloadUpdate()`, `installUpdate()`, `requestInstallPermission()`
 - `VersionListSection(...)` composable + `VersionListCallbacks`
-- domain types: `UpdateInfo`, `VersionError`, `Result`, `DownloadProgress(Tracker)`
+- `RequiredUpdateController` (headless) + `rememberRequiredUpdateController(...)`
+- `RequiredUpdateGate(...)` + `RequiredUpdateScope`, `RequiredUpdateState`, `UpdateStage`
+- domain types: `UpdateInfo` (incl. `UpdateInfo.isRequired`), `VersionError`, `Result`, `DownloadProgress(Tracker)`
 
 Everything in `data/` and the Android `ApkInstaller` / `InstallEventBus` is `internal`. In `build.gradle.kts`, dependencies that appear in public signatures use `api(...)` (coroutines, okio, koin-core, compose) and pure implementation details use `implementation(...)` (ktor, serialization). **Keep that split** when adding a dependency — mis-scoping it silently breaks the host's compile classpath.
 
@@ -89,12 +91,63 @@ Downloads write to `destinationDir / "update_<sanitized fileId>"` and the host p
 
 **User-facing strings in the UI and in some error paths are Vietnamese and hardcoded** (e.g. `"Tải xuống thất bại"`, `"Thử lại"`). Match that when adding UI text.
 
+### Forced update (`is_required`)
+
+Server trả `is_required` trên từng version; `VersionData.fromResponseItem` map thành
+`UpdateInfo.isRequired` (mặc định `false`). `List<UpdateInfo>.requiredUpdate()`
+(`domain/entity/RequiredUpdate.kt`) chọn bản bắt buộc cao nhất **sau khi**
+`shouldPresentUpdate` đã lọc — nên một version bật cờ mà thiếu file hoặc không mới hơn
+sẽ không khoá được app. Đó là chủ ý, đừng "sửa".
+
+`RequiredUpdateController` (`presentation/update/`) là state holder headless cho luồng
+này: public API là `state: StateFlow<RequiredUpdateState>`, `check()`, `download()`,
+`install()`, `requestInstallPermission()`, `retry()`, `close()`. Nó nhận `CoroutineScope`
+từ ngoài (qua constructor public, không tham số `installOutcomes`) nên host dùng
+ViewModel riêng vẫn được — nhưng controller **không** chạy trực tiếp trên scope đó: nó
+tự tạo một `controllerScope` con (`SupervisorJob` gắn vào `Job` của scope cha) và mọi
+coroutine nội bộ chạy trên scope con này. `close()` chỉ huỷ `controllerScope`, không đụng
+tới scope host truyền vào — vì vậy host được phép truyền một scope dùng chung (ví dụ
+scope của ViewModel sống lâu hơn) mà không sợ `close()` làm sập những coroutine khác trên
+scope đó. Constructor chính (nhận thêm `installOutcomes: Flow<InstallOutcome>`) là
+`internal`, tồn tại chỉ để test tiêm outcome giả; constructor public không có tham số đó
+và mặc định dùng `platformInstallOutcomes`.
+
+`observeInstallOutcomes()` chỉ áp `InstallOutcome.Failure` khi state hiện tại là
+`Required` **và** đang ở `UpdateStage.Installing` — một outcome trễ/trùng từ lượt cài
+trước (ví dụ sau khi host đã gọi `retry()` và bắt đầu chu kỳ mới) sẽ bị bỏ qua thay vì
+ghi đè stage mới. Đây là do `InstallOutcome` đến từ `InstallEventBus` toàn tiến trình,
+không mang token liên kết với một lần gọi `install()` cụ thể.
+
+`RequiredUpdateGate(...)` nhận ba slot: `content` (UI bình thường của host), `requiredContent`
+(vẽ khi có bản bắt buộc — nhận `RequiredUpdateScope` để gọi `download()`/`install()`/`retry()`/
+`requestInstallPermission()`), và `checkFailedContent` (chỉ dùng khi `blockOnCheckFailure = true`).
+Mặc định `blockOnCheckFailure = false`: mất mạng thì cho vào app luôn, vì khoá máy POS
+ngoài tiệm là thảm hoạ vận hành. Nhánh `CheckFailed` **không bao giờ** tự bịa ra một
+`UpdateInfo` để hiện `requiredContent` — không có dữ liệu thật thì không vẽ overlay bắt
+buộc, cùng lắm chỉ chặn qua `checkFailedContent`.
+
+Gate tự sở hữu một `Box` xếp lớp (stacking) duy nhất bao quanh `content` và overlay, nên
+nó phủ đúng lớp bất kể host đặt `RequiredUpdateGate` ở đâu trong cây UI. Khi bị chặn,
+overlay không chỉ nuốt pointer input mà còn: rút focus khỏi `content` và chặn nó nhận
+focus lại (`focusProperties { canFocus = false }`), gỡ `content` khỏi cây accessibility
+(`clearAndSetSemantics {}`), và chặn nút back hệ thống. Ba điều sau quan trọng không kém
+việc chặn chạm — một máy quét mã vạch trên POS giả lập bàn phím cứng, nên nếu `content`
+còn giữ focus thì máy quét vẫn "gõ" được dữ liệu vào UI bị khoá phía sau overlay.
+
+Back hệ thống được chặn qua `internal expect/actual BlockSystemBack()`
+(`presentation/update/BlockSystemBack.kt`) chứ không dùng `BackHandler` thẳng trong
+commonMain — Compose Multiplatform 1.9.0 chưa có `BackHandler` cho commonMain. Actual
+Android gọi `androidx.activity.compose.BackHandler(enabled = true) {}` (phụ thuộc
+`activity-compose`, khai báo `implementation` — không `api` — trong `androidMain` của
+`build.gradle.kts`, vì đây là chi tiết cài đặt, không lộ ra public API). Actual Desktop
+là no-op vì desktop không có nút back hệ thống.
+
 ### Server contract
 
 Backend is the Rasa version-management server. Two endpoints, both under the configured `baseUrl`:
 - `GET /api/versions/get-stable/{softwareCode}/{currentVersion}` → `GetStableVersionResponse`
 - `GET /api/upload/download/{fileId}` → binary stream
 
-Server field names are snake_case and **every field is nullable** — `VersionResponseItem` maps them via `@SerialName`, and `VersionData.fromResponseItem()` drops items missing `id`/`version` and forces `isDownloadable = false` when `fileId` is blank. `Json { ignoreUnknownKeys = true; isLenient = true }`. Server naming mismatches are already normalized there (`software` → `softwareName`, `size` → `fileSize`); keep new mapping in that one function rather than leaking nullables into the domain.
+Server field names are snake_case and **every field is nullable** — `VersionResponseItem` maps them via `@SerialName` (including `is_required` → `isRequired`, defaulting to `false` when null), and `VersionData.fromResponseItem()` drops items missing `id`/`version` and forces `isDownloadable = false` when `fileId` is blank. `Json { ignoreUnknownKeys = true; isLenient = true }`. Server naming mismatches are already normalized there (`software` → `softwareName`, `size` → `fileSize`); keep new mapping in that one function rather than leaking nullables into the domain.
 
 `fileSize` arrives as either raw bytes or a formatted string; `parseFileSize` in `UpdateInfo.kt` handles both. Version comparison is semver via `compareVersions` with a digit-stripping fallback for non-semver strings.
