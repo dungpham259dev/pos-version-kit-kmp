@@ -69,10 +69,12 @@ interface RequiredUpdateScope {
  * lại và gỡ nó khỏi cây accessibility, để bàn phím cứng (kể cả máy quét mã vạch giả
  * lập bàn phím) và trình đọc màn hình không thể chạm tới UI phía sau overlay.
  *
- * @param blockOnCheckFailure chặn luôn khi không hỏi được server. Mặc định `false`
- *   (fail-open): máy POS mất mạng vẫn vào được app.
- * @param checkFailedContent UI hiện khi [blockOnCheckFailure] bật và không hỏi được
- *   server. Bỏ qua khi `blockOnCheckFailure = false`.
+ * @param checkFailedContent UI hiện khi không hỏi được server. Truyền slot này để chặn luôn
+ *   trong trường hợp đó; để `null` (mặc định) nghĩa là fail-open — máy POS mất mạng vẫn vào
+ *   được app. Không có tham số bật/tắt riêng: việc chặn khi kiểm tra thất bại và việc cung
+ *   cấp UI cho nó là cùng một hành động, nên host bật chặn mà quên vẽ UI là điều không thể
+ *   xảy ra — sẽ không còn cách nào tạo ra một overlay trong suốt nuốt hết thao tác mà không
+ *   vẽ gì, khoá cứng một máy POS không có lối thoát nào khác ngoài force-stop.
  *
  * Gate tự sở hữu container xếp lớp (stacking) của riêng nó, nên overlay luôn phủ đúng
  * lên trên [content] dù host đặt gate ở đâu trong cây (kể cả bên trong `Column`, `Row`
@@ -81,15 +83,14 @@ interface RequiredUpdateScope {
 @Composable
 fun RequiredUpdateGate(
     controller: RequiredUpdateController,
-    blockOnCheckFailure: Boolean = false,
     requiredContent: @Composable (RequiredUpdateScope) -> Unit,
-    checkFailedContent: @Composable () -> Unit = {},
+    checkFailedContent: (@Composable () -> Unit)? = null,
     content: @Composable () -> Unit
 ) {
     val state by controller.state.collectAsState()
 
     val required = state as? RequiredUpdateState.Required
-    val blockedByCheckFailure = blockOnCheckFailure && state is RequiredUpdateState.CheckFailed
+    val blockedByCheckFailure = checkFailedContent != null && state is RequiredUpdateState.CheckFailed
     val blocked = required != null || blockedByCheckFailure
 
     val focusManager = LocalFocusManager.current
@@ -126,7 +127,7 @@ fun RequiredUpdateGate(
                 if (required != null) {
                     requiredContent(rememberRequiredUpdateScope(controller, required))
                 } else {
-                    checkFailedContent()
+                    checkFailedContent?.invoke()
                 }
             }
         }
