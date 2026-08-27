@@ -111,6 +111,28 @@ class RequiredUpdateControllerTest {
         }
     }
 
+    /**
+     * Cửa sổ chờ cho khẳng định phủ định ("trạng thái này KHÔNG đổi"). Khác với các wait dương
+     * tính ở trên (chờ tới khi điều kiện đúng, kết thúc ngay khi thoả), một wait âm tính không
+     * bao giờ tự kết thúc sớm nếu điều kiện không xảy ra — nên nó phải dùng cửa sổ ngắn, có tên
+     * riêng, thay vì mượn timeout 5000ms vốn dành cho việc chờ một kết quả sẽ tới.
+     */
+    private val STALE_OUTCOME_WINDOW_MS = 300L
+
+    /**
+     * Poll [predicate] bằng thời gian thật trong tối đa [timeoutMs] và trả về liệu nó có bao giờ
+     * đúng hay không, thay vì ném lỗi khi hết giờ — phù hợp cho khẳng định phủ định nơi hết giờ
+     * chính là kết quả mong đợi.
+     */
+    private suspend fun awaitConditionOrTimeout(
+        timeoutMs: Long = STALE_OUTCOME_WINDOW_MS,
+        predicate: () -> Boolean
+    ): Boolean = withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeoutOrNull(timeoutMs) {
+            while (!predicate()) delay(1)
+        } != null
+    }
+
     @Test
     fun no_required_update_yields_NotRequired() = runTest(UnconfinedTestDispatcher()) {
         val repository = FakeVersionRepository(updates = listOf(testUpdate(isRequired = false)))
@@ -436,16 +458,13 @@ class RequiredUpdateControllerTest {
         outcomes.emit(InstallOutcome.Failure("Outcome trễ từ lượt cài trước"))
 
         // Chờ thật một khoảng thời gian để outcome trễ có cơ hội tới collector trước khi assert.
-        val staleOverwrote = withContext(Dispatchers.Default.limitedParallelism(1)) {
-            withTimeoutOrNull(300) {
-                sut.state.first {
-                    it is RequiredUpdateState.Required &&
-                        (it.stage as? UpdateStage.Failed)?.message == "Outcome trễ từ lượt cài trước"
-                }
-            }
+        val staleOverwrote = awaitConditionOrTimeout {
+            val state = sut.state.value
+            state is RequiredUpdateState.Required &&
+                (state.stage as? UpdateStage.Failed)?.message == "Outcome trễ từ lượt cài trước"
         }
 
-        assertEquals(null, staleOverwrote, "Outcome trễ ngoài Installing không được ghi đè stage")
+        assertTrue(!staleOverwrote, "Outcome trễ ngoài Installing không được ghi đè stage")
         val current = sut.state.value
         assertIs<RequiredUpdateState.Required>(current)
         assertEquals(UpdateStage.Failed(originalMessage), current.stage)
