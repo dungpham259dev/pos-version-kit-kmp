@@ -105,7 +105,7 @@ Hành vi:
   Tạo `DownloadProgressTracker`, map `DownloadProgress` → `UpdateStage`:
   `Downloading → Downloading`, `Completed → Downloaded(file)`, `Failed → Failed(msg)`,
   `Cancelled → Ready`. Khi `Completed` và `autoInstall = true` thì gọi `install()` ngay.
-- `install(file)`: stage `Installing`, chạy `versionChecker.installUpdate` trên
+- `install()`: cài file đã tải gần nhất (`Downloaded.file`); no-op nếu chưa có file. Stage `Installing`, chạy `versionChecker.installUpdate` trên
   `Dispatchers.Default`. `Result.Error` mang `VersionError.InstallPermissionRequired`
   → stage `InstallPermissionRequired` (host bấm nút gọi `requestInstallPermission()`);
   lỗi khác → `Failed`. Success thì giữ `Installing` — UI hệ thống tiếp quản, kết quả
@@ -113,7 +113,7 @@ Hành vi:
 - `platformInstallOutcomes`: `Failure` → `Failed(message ?: "Cài đặt thất bại")`.
   `Success` → giữ `Installing` (tiến trình sắp bị thay thế).
 - `retry()`: dispatch theo stage — `Failed`/`Ready` → `download()`;
-  `Downloaded`/`InstallPermissionRequired` → `install(lastFile)`;
+  `Downloaded`/`InstallPermissionRequired` → `install()`;
   state `CheckFailed` → `check()`.
 - `close()`: `scope.cancel()`.
 
@@ -183,8 +183,10 @@ interface IVersionInstaller {
 ```
 
 `expect class VersionInstaller : IVersionInstaller`; `InstallUpdateUseCase` nhận
-`IVersionInstaller`. Koin: `single { InstallUpdateUseCase(get<VersionInstaller>()) }`
-giữ nguyên hoặc bind interface. Không đổi hành vi runtime.
+`IVersionInstaller`. Koin giữ nguyên `single { InstallUpdateUseCase(get()) }` vì
+platform module đã cung cấp `VersionInstaller`, chỉ thêm binding
+`single<IVersionInstaller> { get<VersionInstaller>() }` ở module platform.
+Không đổi hành vi runtime.
 
 ## 5. Test
 
