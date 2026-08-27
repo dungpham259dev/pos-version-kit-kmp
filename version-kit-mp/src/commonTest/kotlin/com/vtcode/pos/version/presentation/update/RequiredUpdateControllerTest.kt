@@ -17,6 +17,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -92,6 +94,7 @@ class RequiredUpdateControllerTest {
         installer: FakeInstaller = FakeInstaller(),
         fileSystem: FakeFileSystem = FakeFileSystem(),
         autoInstall: Boolean = true,
+        recheckIntervalMs: Long? = 15 * 60 * 1000L,
         installOutcomes: Flow<InstallOutcome> = MutableSharedFlow()
     ): RequiredUpdateController {
         fileSystem.createDirectories(cacheDir)
@@ -103,6 +106,7 @@ class RequiredUpdateControllerTest {
             softwareCode = "ipos",
             fileSystem = fileSystem,
             autoInstall = autoInstall,
+            recheckIntervalMs = recheckIntervalMs,
             installOutcomes = installOutcomes
         )
     }
@@ -255,6 +259,60 @@ class RequiredUpdateControllerTest {
 
         assertTrue(checkingIndex > retryIndex, "Checking phải xuất hiện sau CheckFailed: $recordedStates")
         assertTrue(checkingIndex < requiredIndex, "Checking phải xuất hiện trước trạng thái Required: $recordedStates")
+    }
+
+    /**
+     * `check()` không chỉ chạy một lần: sau khi ổn định ở `CheckFailed`, controller tự đặt
+     * lịch gọi lại sau `recheckIntervalMs`. `delay()` bên trong chạy trên `controllerScope`,
+     * vốn thừa hưởng dispatcher ảo của `backgroundScope` (cùng `TestCoroutineScheduler` với
+     * `runTest`), nên `advanceTimeBy` đủ để kích hoạt nó — không cần sleep thời gian thật.
+     */
+    @Test
+    fun recheck_after_check_failure_picks_up_update_that_appeared() = runTest(UnconfinedTestDispatcher()) {
+        val recheckInterval = 15 * 60 * 1000L
+        val repository = FakeVersionRepository(checkError = VersionError.TimeoutError)
+        val sut = controller(backgroundScope, repository, recheckIntervalMs = recheckInterval)
+        sut.awaitState { it is RequiredUpdateState.CheckFailed }
+        assertEquals(1, repository.checkCount)
+
+        repository.checkError = null
+        repository.updates = listOf(testUpdate())
+
+        advanceTimeBy(recheckInterval + 1)
+        runCurrent()
+
+        val state = sut.awaitState { it is RequiredUpdateState.Required }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals(2, repository.checkCount)
+    }
+
+    @Test
+    fun recheckIntervalMs_null_performs_exactly_one_check() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(checkError = VersionError.TimeoutError)
+        val sut = controller(backgroundScope, repository, recheckIntervalMs = null)
+        sut.awaitState { it is RequiredUpdateState.CheckFailed }
+        assertEquals(1, repository.checkCount)
+
+        advanceTimeBy(60 * 60 * 1000L)
+        runCurrent()
+
+        assertEquals(1, repository.checkCount)
+        assertIs<RequiredUpdateState.CheckFailed>(sut.state.value)
+    }
+
+    @Test
+    fun no_recheck_fires_while_state_is_Required() = runTest(UnconfinedTestDispatcher()) {
+        val recheckInterval = 15 * 60 * 1000L
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val sut = controller(backgroundScope, repository, recheckIntervalMs = recheckInterval)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        assertEquals(1, repository.checkCount)
+
+        advanceTimeBy(recheckInterval * 4)
+        runCurrent()
+
+        assertEquals(1, repository.checkCount)
+        assertIs<RequiredUpdateState.Required>(sut.state.value)
     }
 
     @Test

@@ -13,6 +13,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +40,18 @@ import okio.Path
  * [state]) không an toàn khi bị thay đổi đồng thời từ nhiều luồng; truyền một scope chạy trên
  * `Dispatchers.IO`/`Dispatchers.Default` có thể khiến hai lệnh gọi (ví dụ [download] hai lần
  * từ hai luồng khác nhau) cùng vượt qua điều kiện bảo vệ.
+ *
+ * **Tự động hỏi lại server ([recheckIntervalMs]).** Với gate đặt ở gốc app, controller sống
+ * suốt phiên chạy — nếu chỉ hỏi server một lần lúc khởi tạo thì "fail-open" (mặc định của
+ * [RequiredUpdateState.CheckFailed]) sẽ biến thành "fail-permanently-open": một máy POS khởi
+ * động khi mất mạng sẽ không bao giờ thấy bản bắt buộc cho tới khi app khởi động lại, và một
+ * bản bị đánh dấu bắt buộc *sau* khi app đã chạy (ví dụ server phát hành bản vá bảo mật) sẽ
+ * không bao giờ chặn máy đó. Vì vậy mỗi khi trạng thái ổn định ở [RequiredUpdateState.NotRequired]
+ * hoặc [RequiredUpdateState.CheckFailed], controller tự đặt lịch gọi lại [check] sau
+ * [recheckIntervalMs] mili-giây; mặc định 15 phút. Không hỏi lại khi đang ở
+ * [RequiredUpdateState.Required] — gate đã chặn UI rồi, hỏi lại lúc này chỉ tranh chấp với vòng
+ * tải/cài đang diễn ra (và [check] chủ động huỷ mọi lượt tải dở dang). Truyền `null` để tắt
+ * hẳn việc hỏi lại (ví dụ khi host tự quản lý vòng đời của controller theo cách khác).
  */
 class RequiredUpdateController internal constructor(
     /** Phải là scope chạy trên main dispatcher (xem KDoc của class). */
@@ -49,6 +62,7 @@ class RequiredUpdateController internal constructor(
     softwareCode: String? = null,
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     private val autoInstall: Boolean = true,
+    private val recheckIntervalMs: Long? = 15 * 60 * 1000L,
     private val installOutcomes: Flow<InstallOutcome>
 ) {
 
@@ -59,7 +73,8 @@ class RequiredUpdateController internal constructor(
         cacheDir: Path,
         softwareCode: String? = null,
         fileSystem: FileSystem = FileSystem.SYSTEM,
-        autoInstall: Boolean = true
+        autoInstall: Boolean = true,
+        recheckIntervalMs: Long? = 15 * 60 * 1000L
     ) : this(
         scope = scope,
         versionChecker = versionChecker,
@@ -68,6 +83,7 @@ class RequiredUpdateController internal constructor(
         softwareCode = softwareCode,
         fileSystem = fileSystem,
         autoInstall = autoInstall,
+        recheckIntervalMs = recheckIntervalMs,
         installOutcomes = platformInstallOutcomes
     )
 
@@ -85,6 +101,7 @@ class RequiredUpdateController internal constructor(
 
     private var checkJob: Job? = null
     private var downloadJob: Job? = null
+    private var recheckJob: Job? = null
 
     init {
         check()
@@ -125,7 +142,9 @@ class RequiredUpdateController internal constructor(
     /**
      * Bắt đầu (hoặc lặp lại) chu kỳ kiểm tra bản cập nhật. Huỷ mọi lượt tải đang chạy dở
      * — nếu không, một bản tải cũ có thể hoàn tất sau khi state đã sang chu kỳ mới và tự
-     * động kích hoạt cài đặt mà người dùng không yêu cầu.
+     * động kích hoạt cài đặt mà người dùng không yêu cầu. Cũng huỷ lịch hỏi lại đang chờ
+     * (nếu có) — lệnh gọi thủ công (từ host hoặc từ [retry]) không được để sót lại một
+     * timer cũ chạy song song với chu kỳ mới này.
      */
     fun check() {
         checkJob?.cancel()
@@ -133,6 +152,8 @@ class RequiredUpdateController internal constructor(
         downloadJob = null
         downloadTracker = null
         lastDownloadedFile = null
+        recheckJob?.cancel()
+        recheckJob = null
         checkJob = controllerScope.launch {
             _state.value = RequiredUpdateState.Checking
             when (val result = versionChecker.check(softwareCode, currentVersion)) {
@@ -149,6 +170,26 @@ class RequiredUpdateController internal constructor(
                     _state.value = RequiredUpdateState.CheckFailed(result.error)
                 }
             }
+            scheduleRecheck()
+        }
+    }
+
+    /**
+     * Đặt lịch gọi lại [check] sau [recheckIntervalMs], chỉ khi trạng thái vừa ổn định ở
+     * [RequiredUpdateState.NotRequired] hoặc [RequiredUpdateState.CheckFailed]. Không đặt lịch
+     * khi đang [RequiredUpdateState.Required] (xem KDoc của class). Job hẹn giờ tự xoá tham
+     * chiếu của chính nó trước khi gọi [check], để [check] không tự huỷ job đang chạy nó.
+     */
+    private fun scheduleRecheck() {
+        val interval = recheckIntervalMs ?: return
+        when (_state.value) {
+            is RequiredUpdateState.NotRequired, is RequiredUpdateState.CheckFailed -> Unit
+            else -> return
+        }
+        recheckJob = controllerScope.launch {
+            delay(interval)
+            recheckJob = null
+            check()
         }
     }
 
