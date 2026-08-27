@@ -63,6 +63,13 @@ kotlin {
                 implementation(libs.kotlinx.coroutines.swing)
             }
         }
+        val desktopTest by getting {
+            dependencies {
+                // koin-test is only used to build/verify the real Koin graph on the JVM
+                // target (see VersionKitDesktopModuleTest) — test-only, never api/implementation.
+                implementation(libs.koin.test)
+            }
+        }
     }
 }
 
