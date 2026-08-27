@@ -13,6 +13,7 @@ import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.contentLength
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
 import okio.FileSystem
 import okio.Path
 import okio.buffer
@@ -28,6 +29,8 @@ internal class VersionRemoteDataSource(
         val response = api.getStableVersion(softwareCode, currentVersion)
         val list = response.data?.mapNotNull { VersionData.fromResponseItem(it) } ?: emptyList()
         Result.Success(list)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: HttpRequestTimeoutException) {
         Result.Error(VersionError.TimeoutError)
     } catch (e: ResponseException) {
@@ -79,6 +82,9 @@ internal class VersionRemoteDataSource(
                 }
             }
             Result.Success(target)
+        } catch (e: CancellationException) {
+            if (fileSystem.exists(target)) fileSystem.delete(target)
+            throw e
         } catch (e: HttpRequestTimeoutException) {
             if (fileSystem.exists(target)) fileSystem.delete(target)
             Result.Error(VersionError.TimeoutError)
