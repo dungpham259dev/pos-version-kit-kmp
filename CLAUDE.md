@@ -112,6 +112,19 @@ scope đó. Constructor chính (nhận thêm `installOutcomes: Flow<InstallOutco
 `internal`, tồn tại chỉ để test tiêm outcome giả; constructor public không có tham số đó
 và mặc định dùng `platformInstallOutcomes`.
 
+`check()` không chỉ chạy một lần lúc khởi tạo. Với gate đặt ở gốc app, controller sống
+suốt phiên chạy, nên chỉ hỏi server một lần là "fail-open" (mặc định khi `CheckFailed`)
+biến thành "fail-permanently-open": máy POS khởi động lúc mất mạng sẽ không bao giờ thấy
+bản bắt buộc cho tới khi app khởi động lại, và một bản bị đánh dấu bắt buộc *sau khi* app
+đã chạy sẽ không bao giờ chặn được máy đó. Vì vậy controller có tham số
+`recheckIntervalMs: Long? = 15 * 60 * 1000L` (ở cả hai constructor, cùng một vị trí, cùng
+giá trị mặc định): mỗi khi trạng thái ổn định ở `NotRequired` hoặc `CheckFailed`, nó tự đặt
+lịch gọi lại `check()` sau khoảng thời gian này trên `controllerScope` (nên `close()` dừng
+được vòng lặp), và không đặt lịch chồng lên nhau — gọi `check()`/`retry()` thủ công sẽ huỷ
+timer đang chờ trước khi bắt đầu chu kỳ mới. **Không** hỏi lại khi đang `Required` — gate đã
+chặn UI rồi, hỏi lại lúc này chỉ tranh chấp với vòng tải/cài đang diễn ra (và `check()` chủ
+động huỷ mọi lượt tải dở dang, xem đoạn dưới). Truyền `null` để tắt hẳn việc hỏi lại.
+
 `observeInstallOutcomes()` chỉ áp `InstallOutcome.Failure` khi state hiện tại là
 `Required` **và** đang ở `UpdateStage.Installing` — một outcome trễ/trùng từ lượt cài
 trước (ví dụ sau khi host đã gọi `retry()` và bắt đầu chu kỳ mới) sẽ bị bỏ qua thay vì
@@ -119,12 +132,18 @@ ghi đè stage mới. Đây là do `InstallOutcome` đến từ `InstallEventBus
 không mang token liên kết với một lần gọi `install()` cụ thể.
 
 `RequiredUpdateGate(...)` nhận ba slot: `content` (UI bình thường của host), `requiredContent`
-(vẽ khi có bản bắt buộc — nhận `RequiredUpdateScope` để gọi `download()`/`install()`/`retry()`/
-`requestInstallPermission()`), và `checkFailedContent` (chỉ dùng khi `blockOnCheckFailure = true`).
-Mặc định `blockOnCheckFailure = false`: mất mạng thì cho vào app luôn, vì khoá máy POS
-ngoài tiệm là thảm hoạ vận hành. Nhánh `CheckFailed` **không bao giờ** tự bịa ra một
-`UpdateInfo` để hiện `requiredContent` — không có dữ liệu thật thì không vẽ overlay bắt
-buộc, cùng lắm chỉ chặn qua `checkFailedContent`.
+(bắt buộc, vẽ khi có bản bắt buộc — nhận `RequiredUpdateScope` để gọi
+`download()`/`install()`/`retry()`/`requestInstallPermission()`), và
+`checkFailedContent: (@Composable () -> Unit)? = null`. Không còn cờ `blockOnCheckFailure`
+riêng: truyền `checkFailedContent` là chặn khi `CheckFailed`, để `null` (mặc định) là
+fail-open — mất mạng thì cho vào app luôn, vì khoá máy POS ngoài tiệm là thảm hoạ vận hành.
+Gộp làm một tham số vì trước đây `blockOnCheckFailure = true` mà quên truyền
+`checkFailedContent` (nó có default rỗng `{}`) tạo ra một overlay trong suốt nuốt hết chạm,
+back, focus và accessibility mà không vẽ gì — trên máy POS thứ đó không khác gì máy bị đơ,
+không có lối thoát ngoài force-stop. Với slot nullable, "bật chặn" và "có UI để chặn" là
+cùng một hành động nên bẫy đó không còn cách nào xảy ra. Nhánh `CheckFailed` **không bao giờ**
+tự bịa ra một `UpdateInfo` để hiện `requiredContent` — không có dữ liệu thật thì không vẽ
+overlay bắt buộc, cùng lắm chỉ chặn qua `checkFailedContent`.
 
 Gate tự sở hữu một `Box` xếp lớp (stacking) duy nhất bao quanh `content` và overlay, nên
 nó phủ đúng lớp bất kể host đặt `RequiredUpdateGate` ở đâu trong cây UI. Khi bị chặn,
