@@ -112,6 +112,14 @@ scope đó. Constructor chính (nhận thêm `installOutcomes: Flow<InstallOutco
 `internal`, tồn tại chỉ để test tiêm outcome giả; constructor public không có tham số đó
 và mặc định dùng `platformInstallOutcomes`.
 
+**`scope` bắt buộc phải bị giới hạn (confined) vào main dispatcher** — `viewModelScope` hay
+`CoroutineScope(SupervisorJob() + Dispatchers.Main)` đều hợp lệ. Trạng thái nội bộ của
+controller (`lastDownloadedFile`, `downloadTracker`, các `Job` theo dõi, và việc cập nhật
+`state`) không dùng lock/atomic gì cả — an toàn đồng thời chỉ được đảm bảo bằng cách buộc mọi
+thay đổi chạy tuần tự trên một luồng. Truyền một scope chạy trên `Dispatchers.IO`/`Default` có
+thể khiến hai lệnh gọi (ví dụ `download()` hai lần từ hai luồng khác nhau) cùng vượt qua điều
+kiện bảo vệ cùng lúc.
+
 `check()` không chỉ chạy một lần lúc khởi tạo. Với gate đặt ở gốc app, controller sống
 suốt phiên chạy, nên chỉ hỏi server một lần là "fail-open" (mặc định khi `CheckFailed`)
 biến thành "fail-permanently-open": máy POS khởi động lúc mất mạng sẽ không bao giờ thấy
