@@ -32,8 +32,16 @@ import okio.Path
  * huỷ theo child scope này (structured concurrency), nhưng [close] chỉ huỷ child scope nên
  * không ảnh hưởng tới các coroutine khác đang chạy trên [scope] của host. Gọi [close] khi
  * không dùng nữa.
+ *
+ * **[scope] bắt buộc phải bị giới hạn (confined) vào main dispatcher** — một `viewModelScope`
+ * hoặc `CoroutineScope(SupervisorJob() + Dispatchers.Main)` là hợp lệ. Trạng thái nội bộ của
+ * controller (`lastDownloadedFile`, `downloadTracker`, các `Job` theo dõi, và việc cập nhật
+ * [state]) không an toàn khi bị thay đổi đồng thời từ nhiều luồng; truyền một scope chạy trên
+ * `Dispatchers.IO`/`Dispatchers.Default` có thể khiến hai lệnh gọi (ví dụ [download] hai lần
+ * từ hai luồng khác nhau) cùng vượt qua điều kiện bảo vệ.
  */
 class RequiredUpdateController internal constructor(
+    /** Phải là scope chạy trên main dispatcher (xem KDoc của class). */
     private val scope: CoroutineScope,
     private val versionChecker: VersionChecker,
     private val currentVersion: String,
@@ -76,6 +84,7 @@ class RequiredUpdateController internal constructor(
     private var downloadTracker: DownloadProgressTracker? = null
 
     private var checkJob: Job? = null
+    private var downloadJob: Job? = null
 
     init {
         check()
@@ -113,8 +122,17 @@ class RequiredUpdateController internal constructor(
         }
     }
 
+    /**
+     * Bắt đầu (hoặc lặp lại) chu kỳ kiểm tra bản cập nhật. Huỷ mọi lượt tải đang chạy dở
+     * — nếu không, một bản tải cũ có thể hoàn tất sau khi state đã sang chu kỳ mới và tự
+     * động kích hoạt cài đặt mà người dùng không yêu cầu.
+     */
     fun check() {
         checkJob?.cancel()
+        downloadJob?.cancel()
+        downloadJob = null
+        downloadTracker = null
+        lastDownloadedFile = null
         checkJob = controllerScope.launch {
             _state.value = RequiredUpdateState.Checking
             when (val result = versionChecker.check(softwareCode, currentVersion)) {
@@ -145,48 +163,53 @@ class RequiredUpdateController internal constructor(
         downloadTracker = tracker
         setStage(UpdateStage.Downloading(0, 0L, 0L))
 
-        controllerScope.launch {
-            tracker.progress.collectLatest { progress ->
-                when (progress) {
-                    is DownloadProgress.Downloading -> setStage(
-                        UpdateStage.Downloading(
-                            percentage = progress.percentage,
-                            downloadedBytes = progress.downloadedBytes,
-                            totalBytes = progress.totalBytes
+        // Cả collector tiến trình lẫn lệnh tải thật đều nằm trong cùng một Job, để check()
+        // có thể huỷ toàn bộ lượt tải đang chạy dở bằng một lời gọi cancel() duy nhất.
+        downloadJob = controllerScope.launch {
+            launch {
+                tracker.progress.collectLatest { progress ->
+                    when (progress) {
+                        is DownloadProgress.Downloading -> setStage(
+                            UpdateStage.Downloading(
+                                percentage = progress.percentage,
+                                downloadedBytes = progress.downloadedBytes,
+                                totalBytes = progress.totalBytes
+                            )
                         )
-                    )
 
-                    is DownloadProgress.Completed -> {
-                        lastDownloadedFile = progress.file
-                        downloadTracker = null
-                        setStage(UpdateStage.Downloaded(progress.file))
-                        if (autoInstall) install()
+                        is DownloadProgress.Completed -> {
+                            lastDownloadedFile = progress.file
+                            downloadTracker = null
+                            setStage(UpdateStage.Downloaded(progress.file))
+                            if (autoInstall) install()
+                        }
+
+                        is DownloadProgress.Failed -> {
+                            downloadTracker = null
+                            setStage(UpdateStage.Failed("Tải xuống thất bại: ${progress.error}"))
+                        }
+
+                        is DownloadProgress.Cancelled -> {
+                            downloadTracker = null
+                            setStage(UpdateStage.Ready)
+                        }
+
+                        DownloadProgress.Idle -> Unit
                     }
-
-                    is DownloadProgress.Failed -> {
-                        downloadTracker = null
-                        setStage(UpdateStage.Failed("Tải xuống thất bại: ${progress.error}"))
-                    }
-
-                    is DownloadProgress.Cancelled -> {
-                        downloadTracker = null
-                        setStage(UpdateStage.Ready)
-                    }
-
-                    DownloadProgress.Idle -> Unit
                 }
             }
-        }
 
-        controllerScope.launch {
-            versionChecker.downloadUpdate(update, cacheDir, fileSystem, tracker)
+            launch {
+                versionChecker.downloadUpdate(update, cacheDir, fileSystem, tracker)
+            }
         }
     }
 
-    /** Cài file đã tải gần nhất. No-op nếu chưa tải xong. */
+    /** Cài file đã tải gần nhất. No-op nếu chưa tải xong hoặc đang cài dở. */
     fun install() {
         val file = lastDownloadedFile ?: return
-        if (_state.value !is RequiredUpdateState.Required) return
+        val current = _state.value as? RequiredUpdateState.Required ?: return
+        if (current.stage is UpdateStage.Installing) return
 
         setStage(UpdateStage.Installing)
         controllerScope.launch {

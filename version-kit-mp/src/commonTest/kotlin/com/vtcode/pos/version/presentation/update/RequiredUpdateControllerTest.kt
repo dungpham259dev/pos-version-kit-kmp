@@ -56,6 +56,32 @@ private class YieldingVersionRepository(
     ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
 }
 
+/**
+ * Bọc [FakeVersionRepository] và `delay()` một khoảng thời gian thật trước khi tải thật sự
+ * chạm vào delegate, để test có một cửa sổ đáng tin cậy để can thiệp (ví dụ gọi [check])
+ * trong khi lượt tải đang "mồ côi" trên [kotlinx.coroutines.Dispatchers.Default].
+ */
+private class DelayedDownloadVersionRepository(
+    private val delegate: FakeVersionRepository,
+    private val delayMs: Long = 200
+) : IVersionRepository {
+
+    override suspend fun checkForUpdate(
+        softwareCode: String,
+        currentVersion: String
+    ): Result<List<UpdateInfo>, VersionError> = delegate.checkForUpdate(softwareCode, currentVersion)
+
+    override suspend fun downloadFileWithProgress(
+        fileId: String,
+        destinationDir: Path,
+        fileSystem: FileSystem,
+        onProgress: (Int, Long, Long) -> Unit
+    ): Result<Path, VersionError> {
+        delay(delayMs)
+        return delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
+    }
+}
+
 class RequiredUpdateControllerTest {
 
     private val cacheDir = "/cache".toPath()
@@ -343,6 +369,60 @@ class RequiredUpdateControllerTest {
             it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
         }
         assertEquals(1, repository.downloadCount)
+    }
+
+    @Test
+    fun second_install_call_while_installing_is_ignored() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller()
+        val sut = controller(backgroundScope, repository, installer, autoInstall = false)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Downloaded
+        }
+
+        sut.install()
+        sut.install()
+
+        awaitCondition { installer.installed.isNotEmpty() }
+        assertEquals(1, installer.installed.size)
+    }
+
+    @Test
+    fun check_mid_download_abandons_orphaned_download() = runTest(UnconfinedTestDispatcher()) {
+        val fileSystem = FakeFileSystem()
+        fileSystem.createDirectories(cacheDir)
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller()
+        val sut = RequiredUpdateController(
+            scope = backgroundScope,
+            versionChecker = testVersionChecker(DelayedDownloadVersionRepository(repository), installer),
+            currentVersion = "1.0.0",
+            cacheDir = cacheDir,
+            softwareCode = "ipos",
+            fileSystem = fileSystem
+        )
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+        sut.awaitState {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Downloading
+        }
+
+        sut.check()
+
+        assertIs<RequiredUpdateState.Required>(
+            sut.awaitState { it is RequiredUpdateState.Required && it.stage == UpdateStage.Ready }
+        )
+
+        val becameInstalling = awaitConditionOrTimeout(timeoutMs = 500) {
+            val state = sut.state.value
+            state is RequiredUpdateState.Required && state.stage is UpdateStage.Installing
+        }
+        assertTrue(!becameInstalling, "check() giữa chừng tải không được để lượt tải mồ côi tự động cài đặt")
+        assertTrue(installer.installed.isEmpty(), "Installer không được gọi từ lượt tải đã bị check() huỷ bỏ")
+        assertEquals(0, repository.downloadCount, "Lượt tải mồ côi phải bị huỷ trước khi chạm tới repository")
     }
 
     @Test
