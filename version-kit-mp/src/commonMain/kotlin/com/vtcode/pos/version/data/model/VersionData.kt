@@ -19,7 +19,8 @@ data class VersionData(
     val isDownloadable: Boolean,
     val status: String,
     val releaseNote: String?,
-    val description: String?
+    val description: String?,
+    val isRequired: Boolean = false
 ) {
     companion object {
         /**
@@ -50,7 +51,8 @@ data class VersionData(
                 isDownloadable = isDownloadable && fileId.isNotBlank(), // Only downloadable if has fileId
                 status = "unknown",
                 releaseNote = item.releaseNote,
-                description = item.description
+                description = item.description,
+                isRequired = item.isRequired ?: false
             )
         }
     }
@@ -72,6 +74,7 @@ fun VersionData.toUpdateInfo(): UpdateInfo {
         fileSize = this.fileSize,
         isDownloadable = this.isDownloadable,
         releaseNote = this.releaseNote,
-        description = this.description
+        description = this.description,
+        isRequired = this.isRequired
     )
 }

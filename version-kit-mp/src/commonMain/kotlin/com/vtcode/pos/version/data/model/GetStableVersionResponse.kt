@@ -26,5 +26,6 @@ data class VersionResponseItem(
     @SerialName("created_by") val createdBy: String? = null,
     @SerialName("updated_by") val updatedBy: String? = null,
     @SerialName("description") val description: String? = null,
-    @SerialName("release_note") val releaseNote: String? = null
+    @SerialName("release_note") val releaseNote: String? = null,
+    @SerialName("is_required") val isRequired: Boolean? = null
 )
