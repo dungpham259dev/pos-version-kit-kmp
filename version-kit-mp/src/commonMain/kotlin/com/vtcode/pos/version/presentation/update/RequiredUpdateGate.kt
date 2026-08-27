@@ -73,6 +73,10 @@ interface RequiredUpdateScope {
  *   (fail-open): máy POS mất mạng vẫn vào được app.
  * @param checkFailedContent UI hiện khi [blockOnCheckFailure] bật và không hỏi được
  *   server. Bỏ qua khi `blockOnCheckFailure = false`.
+ *
+ * Gate tự sở hữu container xếp lớp (stacking) của riêng nó, nên overlay luôn phủ đúng
+ * lên trên [content] dù host đặt gate ở đâu trong cây (kể cả bên trong `Column`, `Row`
+ * hay slot nội dung của `Scaffold`), không phụ thuộc vào parent của host có xếp lớp hay không.
  */
 @Composable
 fun RequiredUpdateGate(
@@ -93,36 +97,38 @@ fun RequiredUpdateGate(
         if (blocked) focusManager.clearFocus(force = true)
     }
 
-    Box(
-        propagateMinConstraints = true,
-        modifier = if (blocked) {
-            Modifier
-                .focusProperties { canFocus = false }
-                .clearAndSetSemantics {}
-        } else {
-            Modifier
+    Box(propagateMinConstraints = true) {
+        Box(
+            propagateMinConstraints = true,
+            modifier = if (blocked) {
+                Modifier
+                    .focusProperties { canFocus = false }
+                    .clearAndSetSemantics {}
+            } else {
+                Modifier
+            }
+        ) {
+            content()
         }
-    ) {
-        content()
-    }
 
-    if (!blocked) return
+        if (blocked) {
+            BlockSystemBack()
 
-    BlockSystemBack()
-
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .pointerInput(Unit) {
-                awaitPointerEventScope {
-                    while (true) awaitPointerEvent()
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(Unit) {
+                        awaitPointerEventScope {
+                            while (true) awaitPointerEvent()
+                        }
+                    }
+            ) {
+                if (required != null) {
+                    requiredContent(rememberRequiredUpdateScope(controller, required))
+                } else {
+                    checkFailedContent()
                 }
             }
-    ) {
-        if (required != null) {
-            requiredContent(rememberRequiredUpdateScope(controller, required))
-        } else {
-            checkFailedContent()
         }
     }
 }
