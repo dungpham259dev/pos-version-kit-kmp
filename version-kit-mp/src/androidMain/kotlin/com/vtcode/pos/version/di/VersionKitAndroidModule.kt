@@ -1,5 +1,6 @@
 package com.vtcode.pos.version.di
 
+import com.vtcode.pos.version.presentation.install.IVersionInstaller
 import com.vtcode.pos.version.presentation.install.VersionInstaller
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.okhttp.OkHttp
@@ -10,4 +11,5 @@ import org.koin.dsl.module
 fun versionKitAndroidModule(): Module = module {
     single<HttpClientEngine>(VersionKitQualifier) { OkHttp.create() }
     single { VersionInstaller(androidContext()) }
+    single<IVersionInstaller> { get<VersionInstaller>() }
 }

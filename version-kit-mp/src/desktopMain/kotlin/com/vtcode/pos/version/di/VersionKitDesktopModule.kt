@@ -1,5 +1,6 @@
 package com.vtcode.pos.version.di
 
+import com.vtcode.pos.version.presentation.install.IVersionInstaller
 import com.vtcode.pos.version.presentation.install.VersionInstaller
 import io.ktor.client.engine.HttpClientEngine
 import io.ktor.client.engine.cio.CIO
@@ -9,4 +10,5 @@ import org.koin.dsl.module
 fun versionKitDesktopModule(): Module = module {
     single<HttpClientEngine>(VersionKitQualifier) { CIO.create() }
     single { VersionInstaller() }
+    single<IVersionInstaller> { get<VersionInstaller>() }
 }
