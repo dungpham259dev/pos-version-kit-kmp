@@ -52,6 +52,8 @@ import com.vtcode.pos.version.domain.error.VersionError
 import com.vtcode.pos.version.domain.usecase.DownloadProgress
 import com.vtcode.pos.version.domain.usecase.DownloadProgressTracker
 import com.vtcode.pos.version.presentation.VersionChecker
+import com.vtcode.pos.version.presentation.install.InstallOutcome
+import com.vtcode.pos.version.presentation.install.platformInstallOutcomes
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -165,6 +167,33 @@ internal class VersionListController(
 
     init {
         checkForUpdates()
+        observeInstallOutcomes()
+    }
+
+    /**
+     * Surfaces terminal outcomes of platform installs that complete asynchronously
+     * after a system confirmation dialog (Android `PackageInstaller`). Without this,
+     * a failed or cancelled install would leave the UI silent.
+     */
+    private fun observeInstallOutcomes() {
+        scope.launch {
+            platformInstallOutcomes.collect { outcome ->
+                when (outcome) {
+                    is InstallOutcome.Success -> {
+                        _installingFile.value = null
+                    }
+
+                    is InstallOutcome.Failure -> {
+                        _installingFile.value = null
+                        val message = outcome.message?.takeIf { it.isNotBlank() }
+                            ?: "Cài đặt thất bại"
+                        callbacks.onError(message, "Thử lại") {
+                            lastInstallFile?.let { installUpdate(it) }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun checkForUpdates(isRefresh: Boolean = false) {
@@ -302,12 +331,20 @@ internal class VersionListController(
                 is Result.Success -> { /* system install UI takes over */ }
 
                 is Result.Error -> {
-                    val message = if (result.error is VersionError.InstallPermissionRequired) {
-                        "Cần quyền cài đặt ứng dụng"
+                    if (result.error is VersionError.InstallPermissionRequired) {
+                        // Open the system "install unknown apps" screen DIRECTLY so the flow
+                        // works even when the host app doesn't surface onError (most do not).
+                        // After granting, the user returns and taps install again.
+                        val launched = versionChecker.requestInstallPermission()
+                        val message = if (launched) {
+                            "Hãy bật quyền \"Cài đặt ứng dụng không xác định\" rồi bấm Cài lại"
+                        } else {
+                            "Cần cấp quyền cài đặt ứng dụng cho thiết bị này"
+                        }
+                        callbacks.onError(message, null, null)
                     } else {
-                        result.error.message
+                        callbacks.onError(result.error.message, "Thử lại") { installUpdate(file) }
                     }
-                    callbacks.onError(message, "Thử lại") { installUpdate(file) }
                 }
             }
         }

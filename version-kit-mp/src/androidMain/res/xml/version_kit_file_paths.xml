@@ -2,4 +2,6 @@
 <paths>
     <cache-path name="version_kit_cache" path="." />
     <external-cache-path name="version_kit_external_cache" path="." />
+    <files-path name="version_kit_files" path="." />
+    <external-files-path name="version_kit_external_files" path="." />
 </paths>

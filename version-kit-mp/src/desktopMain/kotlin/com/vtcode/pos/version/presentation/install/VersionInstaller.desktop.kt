@@ -26,4 +26,7 @@ actual class VersionInstaller {
             Result.Error(VersionError.InstallError(e.message ?: "Failed to launch installer"))
         }
     }
+
+    // Desktop installs do not require a runtime "unknown sources" permission.
+    actual fun requestInstallPermission(): Boolean = true
 }

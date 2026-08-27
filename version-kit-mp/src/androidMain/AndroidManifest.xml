@@ -11,5 +11,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/version_kit_file_paths" />
         </provider>
+
+        <receiver
+            android:name="com.vtcode.pos.version.presentation.PackageInstallerBroadcastReceiver"
+            android:exported="false" />
     </application>
 </manifest>

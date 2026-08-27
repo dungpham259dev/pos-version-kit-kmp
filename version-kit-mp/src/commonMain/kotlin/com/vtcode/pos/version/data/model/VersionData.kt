@@ -30,7 +30,7 @@ data class VersionData(
          * If downloadable but no fileId, mark not downloadable.
          */
         fun fromResponseItem(item: VersionResponseItem): VersionData? {
-            if (item.id == null || item.version == null) {
+            if (item.id.isNullOrBlank() || item.version.isNullOrBlank()) {
                 return null
             }
 

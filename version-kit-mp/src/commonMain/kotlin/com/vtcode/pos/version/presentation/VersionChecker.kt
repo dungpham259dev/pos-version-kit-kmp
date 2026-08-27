@@ -36,4 +36,11 @@ class VersionChecker(
 
     fun installUpdate(file: Path, onComplete: () -> Unit = {}): Result<Unit, VersionError> =
         installUpdateUseCase(file, onComplete)
+
+    /**
+     * Launch the platform flow to grant install permission (Android opens the
+     * "install unknown apps" settings). No-op returning `true` where unneeded (Desktop).
+     */
+    fun requestInstallPermission(): Boolean =
+        installUpdateUseCase.requestInstallPermission()
 }

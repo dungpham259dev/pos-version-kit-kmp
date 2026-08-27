@@ -19,4 +19,7 @@ actual class VersionInstaller(private val context: Context) {
             is ApkInstaller.InstallResult.Failure -> Result.Error(VersionError.InstallError(r.error))
         }
     }
+
+    actual fun requestInstallPermission(): Boolean =
+        ApkInstaller(context).requestInstallPermission()
 }

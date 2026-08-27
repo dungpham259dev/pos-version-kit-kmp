@@ -13,4 +13,7 @@ class InstallUpdateUseCase(
         if (result is Result.Success) onComplete()
         return result
     }
+
+    /** Launch the platform flow to grant install permission. See [VersionInstaller.requestInstallPermission]. */
+    fun requestInstallPermission(): Boolean = installer.requestInstallPermission()
 }

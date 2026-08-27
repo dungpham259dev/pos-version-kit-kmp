@@ -6,7 +6,9 @@ import com.vtcode.pos.version.domain.error.Result
 import com.vtcode.pos.version.domain.error.VersionError
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.ResponseException
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.contentLength
@@ -46,7 +48,15 @@ internal class VersionRemoteDataSource(
         return try {
             fileSystem.createDirectories(destinationDir)
             val base = baseUrl.trimEnd('/')
-            client.prepareGet("$base/api/upload/download/$fileId").execute { response ->
+            client.prepareGet("$base/api/upload/download/$fileId") {
+                // The shared client caps requestTimeout at 60s, which would abort any
+                // large APK/installer download. Lift the overall cap for downloads and
+                // rely on socketTimeout to catch a genuinely stalled connection.
+                timeout {
+                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = 60_000
+                }
+            }.execute { response ->
                 val total = response.contentLength() ?: -1L
                 var downloaded = 0L
                 val channel = response.bodyAsChannel()
@@ -60,6 +70,12 @@ internal class VersionRemoteDataSource(
                         val pct = if (total > 0) ((downloaded * 100) / total).toInt() else -1
                         onProgress(pct, total, downloaded)
                     }
+                }
+                // Guard against a silently truncated response: if the server advertised a
+                // size but closed the stream early (no exception), the saved APK is corrupt.
+                // Fail loudly instead of handing a broken file to the installer.
+                if (total > 0 && downloaded != total) {
+                    error("Tải xuống không đầy đủ: $downloaded/$total byte")
                 }
             }
             Result.Success(target)

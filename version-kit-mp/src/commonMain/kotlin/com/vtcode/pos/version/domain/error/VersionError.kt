@@ -51,10 +51,8 @@ sealed class VersionError(val message: String) {
 /**
  * Extension function to convert Throwable to VersionError
  */
-fun Throwable.toVersionError(): VersionError = when (this) {
-    is VersionError -> this
-    else -> VersionError.UnknownError(this.message ?: "Unknown error")
-}
+fun Throwable.toVersionError(): VersionError =
+    VersionError.UnknownError(this.message ?: "Unknown error")
 
 /**
  * Result type with VersionError for domain layer operations.
