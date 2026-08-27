@@ -6,8 +6,8 @@ import okio.Path
 import java.io.File
 import kotlin.system.exitProcess
 
-actual class VersionInstaller {
-    actual fun install(file: Path): Result<Unit, VersionError> {
+actual class VersionInstaller : IVersionInstaller {
+    actual override fun install(file: Path): Result<Unit, VersionError> {
         val installer = File(file.toString())
         if (!installer.exists()) return Result.Error(VersionError.FileNotFound(installer.absolutePath))
         return try {
@@ -28,5 +28,5 @@ actual class VersionInstaller {
     }
 
     // Desktop installs do not require a runtime "unknown sources" permission.
-    actual fun requestInstallPermission(): Boolean = true
+    actual override fun requestInstallPermission(): Boolean = true
 }

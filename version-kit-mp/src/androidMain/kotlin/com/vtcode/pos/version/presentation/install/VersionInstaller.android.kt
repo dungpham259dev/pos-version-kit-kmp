@@ -7,8 +7,8 @@ import com.vtcode.pos.version.presentation.ApkInstaller
 import okio.Path
 import java.io.File
 
-actual class VersionInstaller(private val context: Context) {
-    actual fun install(file: Path): Result<Unit, VersionError> {
+actual class VersionInstaller(private val context: Context) : IVersionInstaller {
+    actual override fun install(file: Path): Result<Unit, VersionError> {
         val javaFile = File(file.toString())
         if (!javaFile.exists()) return Result.Error(VersionError.FileNotFound(javaFile.absolutePath))
         val installer = ApkInstaller(context)
@@ -20,6 +20,6 @@ actual class VersionInstaller(private val context: Context) {
         }
     }
 
-    actual fun requestInstallPermission(): Boolean =
+    actual override fun requestInstallPermission(): Boolean =
         ApkInstaller(context).requestInstallPermission()
 }
