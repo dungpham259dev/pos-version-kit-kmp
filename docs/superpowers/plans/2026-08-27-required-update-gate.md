@@ -862,6 +862,13 @@ git commit -m "feat: add RequiredUpdateController with check flow"
 
 ### Task 6: Luồng download và auto-install
 
+> **Điều chỉnh sau review Task 5:** controller không còn `launch` trực tiếp trên `scope`
+> host truyền vào. Nó tự dựng một child scope (`controllerScope`) và `close()` chỉ huỷ
+> child đó. Mọi `scope.launch { ... }` trong đoạn code của Task 6 và Task 7 dưới đây phải
+> đọc là `controllerScope.launch { ... }` — dùng đúng tên thuộc tính có trong file sau
+> Task 5. `check()` cũng đã giữ `checkJob` và huỷ job cũ trước khi chạy job mới.
+
+
 **Files:**
 - Modify: `version-kit-mp/src/commonMain/kotlin/com/vtcode/pos/version/presentation/update/RequiredUpdateController.kt`
 - Test: `version-kit-mp/src/commonTest/kotlin/com/vtcode/pos/version/presentation/update/RequiredUpdateControllerTest.kt`
