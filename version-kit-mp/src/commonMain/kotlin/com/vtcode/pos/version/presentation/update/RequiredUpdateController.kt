@@ -85,6 +85,12 @@ class RequiredUpdateController internal constructor(
     /**
      * Android trả kết quả cài đặt bất đồng bộ qua broadcast sau khi dialog hệ thống đóng.
      * Không nghe thì stage kẹt ở [UpdateStage.Installing] khi người dùng bấm Huỷ.
+     *
+     * [InstallOutcome] đến từ `InstallEventBus` toàn tiến trình, không mang token liên kết
+     * với một lần gọi [install] cụ thể. Vì vậy chỉ áp dụng [InstallOutcome.Failure] khi
+     * controller thực sự đang chờ kết quả cài đặt (stage [UpdateStage.Installing]); nếu không,
+     * bỏ qua — nếu không một outcome trễ/trùng từ lượt cài trước có thể ghi đè lên stage của
+     * chu kỳ mới (ví dụ sau khi người dùng đã [retry]).
      */
     private fun observeInstallOutcomes() {
         controllerScope.launch {
@@ -93,11 +99,15 @@ class RequiredUpdateController internal constructor(
                     // Tiến trình sắp bị thay thế; giữ nguyên Installing.
                     is InstallOutcome.Success -> Unit
 
-                    is InstallOutcome.Failure -> setStage(
-                        UpdateStage.Failed(
-                            outcome.message?.takeIf { it.isNotBlank() } ?: "Cài đặt thất bại"
+                    is InstallOutcome.Failure -> {
+                        val current = _state.value as? RequiredUpdateState.Required ?: return@collect
+                        if (current.stage !is UpdateStage.Installing) return@collect
+                        setStage(
+                            UpdateStage.Failed(
+                                outcome.message?.takeIf { it.isNotBlank() } ?: "Cài đặt thất bại"
+                            )
                         )
-                    )
+                    }
                 }
             }
         }

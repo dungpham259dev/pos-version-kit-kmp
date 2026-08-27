@@ -20,6 +20,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import okio.FileSystem
 import okio.Path
@@ -408,5 +409,45 @@ class RequiredUpdateControllerTest {
         }
         assertIs<RequiredUpdateState.Required>(state)
         assertEquals("Cài đặt thất bại", (state.stage as UpdateStage.Failed).message)
+    }
+
+    /**
+     * `InstallOutcome` không mang token liên kết với một lần gọi `install()` cụ thể, nên một
+     * outcome trễ từ lượt cài trước có thể đến sau khi controller đã chuyển sang chu kỳ khác.
+     * Test này đưa controller tới [UpdateStage.Failed] (không phải qua platform outcome, mà
+     * qua lỗi cài đặt cục bộ) rồi bắn một `InstallOutcome.Failure` trễ; guard trong
+     * `observeInstallOutcomes()` phải bỏ qua nó vì stage hiện tại không phải [UpdateStage.Installing].
+     */
+    @Test
+    fun stale_install_failure_outside_installing_stage_is_ignored() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller(result = Result.Error(VersionError.InstallError("signature mismatch")))
+        val outcomes = MutableSharedFlow<InstallOutcome>(extraBufferCapacity = 1)
+        val sut = controller(backgroundScope, repository, installer, installOutcomes = outcomes)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+        val failedState = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertIs<RequiredUpdateState.Required>(failedState)
+        val originalMessage = (failedState.stage as UpdateStage.Failed).message
+
+        outcomes.emit(InstallOutcome.Failure("Outcome trễ từ lượt cài trước"))
+
+        // Chờ thật một khoảng thời gian để outcome trễ có cơ hội tới collector trước khi assert.
+        val staleOverwrote = withContext(Dispatchers.Default.limitedParallelism(1)) {
+            withTimeoutOrNull(300) {
+                sut.state.first {
+                    it is RequiredUpdateState.Required &&
+                        (it.stage as? UpdateStage.Failed)?.message == "Outcome trễ từ lượt cài trước"
+                }
+            }
+        }
+
+        assertEquals(null, staleOverwrote, "Outcome trễ ngoài Installing không được ghi đè stage")
+        val current = sut.state.value
+        assertIs<RequiredUpdateState.Required>(current)
+        assertEquals(UpdateStage.Failed(originalMessage), current.stage)
     }
 }
