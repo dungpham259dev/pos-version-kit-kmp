@@ -54,6 +54,7 @@ kotlin {
             dependencies {
                 implementation(libs.ktor.client.okhttp)
                 api(libs.koin.android)
+                implementation(libs.androidx.activity.compose)
             }
         }
         val desktopMain by getting {
