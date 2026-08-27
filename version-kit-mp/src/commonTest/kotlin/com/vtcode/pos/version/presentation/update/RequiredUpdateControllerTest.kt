@@ -9,10 +9,13 @@ import com.vtcode.pos.version.fake.FakeVersionRepository
 import com.vtcode.pos.version.fake.testUpdate
 import com.vtcode.pos.version.fake.testVersionChecker
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import okio.FileSystem
@@ -75,6 +78,32 @@ class RequiredUpdateControllerTest {
     private suspend fun RequiredUpdateController.awaitState(
         predicate: (RequiredUpdateState) -> Boolean
     ): RequiredUpdateState = withTimeout(5_000) { state.first(predicate) }
+
+    /**
+     * `download()`/`install()` chạy `DownloadUpdateUseCase`/`installUpdate` bên trong
+     * `withContext(Dispatchers.Default)` — công việc thật, không nằm trên `TestDispatcher` của
+     * `runTest`. Timeout ảo của [awaitState] có thể fire ngay lập tức trước khi coroutine đó kịp
+     * trả kết quả, nên các test download/install chờ bằng thời gian thật thay vì thời gian ảo.
+     */
+    private suspend fun RequiredUpdateController.awaitStateAfterDownloadOrInstall(
+        predicate: (RequiredUpdateState) -> Boolean
+    ): RequiredUpdateState = withContext(Dispatchers.Default.limitedParallelism(1)) {
+        withTimeout(5_000) { state.first(predicate) }
+    }
+
+    /**
+     * `install()` chuyển trạng thái sang [UpdateStage.Installing] *trước khi* coroutine thật
+     * gọi `installer.install(file)` trên [Dispatchers.Default], nên riêng việc thấy trạng thái
+     * đó không đảm bảo installer đã được gọi. Poll bằng thời gian thật cho tới khi side effect
+     * thật sự xảy ra.
+     */
+    private suspend fun awaitCondition(predicate: () -> Boolean) {
+        withContext(Dispatchers.Default.limitedParallelism(1)) {
+            withTimeout(5_000) {
+                while (!predicate()) delay(1)
+            }
+        }
+    }
 
     @Test
     fun no_required_update_yields_NotRequired() = runTest(UnconfinedTestDispatcher()) {
@@ -172,5 +201,119 @@ class RequiredUpdateControllerTest {
 
         assertTrue(checkingIndex > retryIndex, "Checking phải xuất hiện sau CheckFailed: $recordedStates")
         assertTrue(checkingIndex < requiredIndex, "Checking phải xuất hiện trước trạng thái Required: $recordedStates")
+    }
+
+    @Test
+    fun download_reaches_Downloaded_and_auto_installs() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller()
+        val sut = controller(backgroundScope, repository, installer)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        val installing = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
+        }
+        assertIs<RequiredUpdateState.Required>(installing)
+        awaitCondition { installer.installed.isNotEmpty() }
+        assertEquals(1, installer.installed.size)
+        assertEquals("update_file-1", installer.installed.first().name)
+    }
+
+    @Test
+    fun download_stops_at_Downloaded_when_autoInstall_disabled() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val installer = FakeInstaller()
+        val sut = controller(backgroundScope, repository, installer, autoInstall = false)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        val state = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Downloaded
+        }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertTrue(installer.installed.isEmpty())
+
+        sut.install()
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
+        }
+        awaitCondition { installer.installed.isNotEmpty() }
+        assertEquals(1, installer.installed.size)
+    }
+
+    @Test
+    fun download_error_yields_Failed_stage() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(
+            updates = listOf(testUpdate()),
+            downloadError = VersionError.NetworkError("offline")
+        )
+        val sut = controller(backgroundScope, repository)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        val state = sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertTrue((state.stage as UpdateStage.Failed).message.isNotBlank())
+    }
+
+    @Test
+    fun corrupt_download_yields_Failed_stage() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(
+            updates = listOf(testUpdate()),
+            writeCorruptFile = true
+        )
+        val installer = FakeInstaller()
+        val sut = controller(backgroundScope, repository, installer)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+        assertTrue(installer.installed.isEmpty())
+    }
+
+    @Test
+    fun retry_after_download_failure_downloads_again() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(
+            updates = listOf(testUpdate()),
+            downloadError = VersionError.NetworkError("offline")
+        )
+        val sut = controller(backgroundScope, repository)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Failed
+        }
+
+        repository.downloadError = null
+        sut.retry()
+
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
+        }
+        assertEquals(2, repository.downloadCount)
+    }
+
+    @Test
+    fun second_download_call_while_downloading_is_ignored() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val sut = controller(backgroundScope, repository)
+        sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.download()
+        sut.download()
+
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
+        }
+        assertEquals(1, repository.downloadCount)
     }
 }

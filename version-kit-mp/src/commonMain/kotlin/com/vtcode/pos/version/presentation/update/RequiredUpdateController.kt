@@ -2,15 +2,21 @@ package com.vtcode.pos.version.presentation.update
 
 import com.vtcode.pos.version.domain.entity.requiredUpdate
 import com.vtcode.pos.version.domain.error.Result
+import com.vtcode.pos.version.domain.error.VersionError
+import com.vtcode.pos.version.domain.usecase.DownloadProgress
+import com.vtcode.pos.version.domain.usecase.DownloadProgressTracker
 import com.vtcode.pos.version.presentation.VersionChecker
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import okio.FileSystem
 import okio.Path
 
@@ -43,6 +49,9 @@ class RequiredUpdateController(
     private val _state = MutableStateFlow<RequiredUpdateState>(RequiredUpdateState.Checking)
     val state: StateFlow<RequiredUpdateState> = _state.asStateFlow()
 
+    private var lastDownloadedFile: Path? = null
+    private var downloadTracker: DownloadProgressTracker? = null
+
     private var checkJob: Job? = null
 
     init {
@@ -70,9 +79,94 @@ class RequiredUpdateController(
         }
     }
 
+    /** Tải bản bắt buộc. No-op nếu không ở [UpdateStage.Ready] hoặc [UpdateStage.Failed]. */
+    fun download() {
+        val current = _state.value as? RequiredUpdateState.Required ?: return
+        if (current.stage !is UpdateStage.Ready && current.stage !is UpdateStage.Failed) return
+        if (downloadTracker?.isInProgress == true) return
+
+        val update = current.update
+        val tracker = DownloadProgressTracker()
+        downloadTracker = tracker
+        setStage(UpdateStage.Downloading(0, 0L, 0L))
+
+        controllerScope.launch {
+            tracker.progress.collectLatest { progress ->
+                when (progress) {
+                    is DownloadProgress.Downloading -> setStage(
+                        UpdateStage.Downloading(
+                            percentage = progress.percentage,
+                            downloadedBytes = progress.downloadedBytes,
+                            totalBytes = progress.totalBytes
+                        )
+                    )
+
+                    is DownloadProgress.Completed -> {
+                        lastDownloadedFile = progress.file
+                        downloadTracker = null
+                        setStage(UpdateStage.Downloaded(progress.file))
+                        if (autoInstall) install()
+                    }
+
+                    is DownloadProgress.Failed -> {
+                        downloadTracker = null
+                        setStage(UpdateStage.Failed("Tải xuống thất bại: ${progress.error}"))
+                    }
+
+                    is DownloadProgress.Cancelled -> {
+                        downloadTracker = null
+                        setStage(UpdateStage.Ready)
+                    }
+
+                    DownloadProgress.Idle -> Unit
+                }
+            }
+        }
+
+        controllerScope.launch {
+            versionChecker.downloadUpdate(update, cacheDir, fileSystem, tracker)
+        }
+    }
+
+    /** Cài file đã tải gần nhất. No-op nếu chưa tải xong. */
+    fun install() {
+        val file = lastDownloadedFile ?: return
+        if (_state.value !is RequiredUpdateState.Required) return
+
+        setStage(UpdateStage.Installing)
+        controllerScope.launch {
+            val result = withContext(Dispatchers.Default) { versionChecker.installUpdate(file) }
+            when (result) {
+                // UI hệ thống tiếp quản; kết quả thật về qua platformInstallOutcomes.
+                is Result.Success -> Unit
+
+                is Result.Error -> setStage(
+                    if (result.error is VersionError.InstallPermissionRequired) {
+                        UpdateStage.InstallPermissionRequired
+                    } else {
+                        UpdateStage.Failed(result.error.message)
+                    }
+                )
+            }
+        }
+    }
+
+    /** Mở màn hình cấp quyền cài đặt của nền tảng. */
+    fun requestInstallPermission(): Boolean = versionChecker.requestInstallPermission()
+
+    private fun setStage(stage: UpdateStage) {
+        val current = _state.value as? RequiredUpdateState.Required ?: return
+        _state.value = current.copy(stage = stage)
+    }
+
     fun retry() {
-        when (_state.value) {
+        when (val current = _state.value) {
             is RequiredUpdateState.CheckFailed -> check()
+            is RequiredUpdateState.Required -> when (current.stage) {
+                is UpdateStage.Ready, is UpdateStage.Failed -> download()
+                is UpdateStage.Downloaded, UpdateStage.InstallPermissionRequired -> install()
+                else -> Unit
+            }
             else -> Unit
         }
     }
