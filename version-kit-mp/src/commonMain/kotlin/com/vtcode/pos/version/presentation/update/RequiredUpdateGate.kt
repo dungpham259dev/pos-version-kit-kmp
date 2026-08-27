@@ -22,7 +22,7 @@ import okio.FileSystem
 import okio.Path
 
 /**
- * Tạo và ghi nhớ một [RequiredUpdateController]; huỷ scope của nó khi composable rời khỏi cây.
+ * Remembers a [RequiredUpdateController] and closes it when the composable leaves the tree.
  */
 @Composable
 fun rememberRequiredUpdateController(
@@ -50,7 +50,7 @@ fun rememberRequiredUpdateController(
     return controller
 }
 
-/** Những gì UI của host nhận được để vẽ màn hình bắt buộc cập nhật. */
+/** What the host's blocking UI receives to render itself. */
 interface RequiredUpdateScope {
     val update: UpdateInfo
     val stage: UpdateStage
@@ -61,24 +61,19 @@ interface RequiredUpdateScope {
 }
 
 /**
- * Vẽ [content], rồi phủ lên trên UI của host khi có bản bắt buộc phải cài.
+ * Draws [content], then covers it while a mandatory update is pending. The kit draws nothing
+ * inside the overlay — [requiredContent] is the host's.
  *
- * Overlay nuốt toàn bộ chạm và chặn nút back, nên [content] không thao tác được cho tới
- * khi cài xong. Kit không vẽ gì bên trong overlay — [requiredContent] là của host.
- * Khi bị chặn, overlay còn thu hồi focus khỏi [content], không cho nó nhận focus trở
- * lại và gỡ nó khỏi cây accessibility, để bàn phím cứng (kể cả máy quét mã vạch giả
- * lập bàn phím) và trình đọc màn hình không thể chạm tới UI phía sau overlay.
+ * While blocked, the overlay swallows pointer input and back, and also clears focus from
+ * [content], stops it taking focus back, and removes it from the accessibility tree — a POS
+ * barcode scanner presents as a hardware keyboard, so touch alone is not enough.
  *
- * @param checkFailedContent UI hiện khi không hỏi được server. Truyền slot này để chặn luôn
- *   trong trường hợp đó; để `null` (mặc định) nghĩa là fail-open — máy POS mất mạng vẫn vào
- *   được app. Không có tham số bật/tắt riêng: việc chặn khi kiểm tra thất bại và việc cung
- *   cấp UI cho nó là cùng một hành động, nên host bật chặn mà quên vẽ UI là điều không thể
- *   xảy ra — sẽ không còn cách nào tạo ra một overlay trong suốt nuốt hết thao tác mà không
- *   vẽ gì, khoá cứng một máy POS không có lối thoát nào khác ngoài force-stop.
+ * The gate owns its own stacking container, so it layers correctly wherever the host places it.
  *
- * Gate tự sở hữu container xếp lớp (stacking) của riêng nó, nên overlay luôn phủ đúng
- * lên trên [content] dù host đặt gate ở đâu trong cây (kể cả bên trong `Column`, `Row`
- * hay slot nội dung của `Scaffold`), không phụ thuộc vào parent của host có xếp lớp hay không.
+ * @param checkFailedContent supplying this slot is what opts into blocking when the check fails;
+ *   `null` means fail-open. There is deliberately no separate flag — opting in and providing the
+ *   UI are the same act, so no host can produce a transparent overlay that blocks everything and
+ *   draws nothing.
  */
 @Composable
 fun RequiredUpdateGate(

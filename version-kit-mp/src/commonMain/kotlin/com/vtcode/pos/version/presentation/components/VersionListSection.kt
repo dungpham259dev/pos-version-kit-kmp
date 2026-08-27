@@ -178,7 +178,7 @@ internal class VersionListController(
     private fun observeInstallOutcomes() {
         scope.launch {
             platformInstallOutcomes.collect { outcome ->
-                // Bus toàn tiến trình, không có token liên kết lượt cài: bỏ qua outcome khi controller này không chờ cài.
+                // process-wide bus with no per-install token: ignore outcomes this controller isn't awaiting
                 if (_installingFile.value == null) return@collect
                 when (outcome) {
                     is InstallOutcome.Success -> {

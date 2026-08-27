@@ -39,7 +39,7 @@ class FakeVersionRepository(
     var updates: List<UpdateInfo> = emptyList(),
     var checkError: VersionError? = null,
     var downloadError: VersionError? = null,
-    /** Ghi rác thay vì ZIP magic để giả lập file tải về hỏng. */
+    /** Writes junk instead of the ZIP magic, to fake a corrupt download. */
     var writeCorruptFile: Boolean = false
 ) : IVersionRepository {
 

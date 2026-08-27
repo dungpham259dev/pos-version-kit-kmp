@@ -2,6 +2,6 @@ package com.vtcode.pos.version.presentation.update
 
 import androidx.compose.runtime.Composable
 
-/** Nuốt nút back của hệ thống khi overlay bắt buộc đang hiện. */
+/** Swallows the system back gesture while the blocking overlay is up. */
 @Composable
 internal expect fun BlockSystemBack()

@@ -34,11 +34,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
-/**
- * Bọc [FakeVersionRepository] và chèn một điểm suspend thật (`yield()`) trước khi trả kết
- * quả `checkForUpdate`, để test có thể quan sát chắc chắn trạng thái [RequiredUpdateState.Checking]
- * trước khi nó bị `StateFlow` conflate mất bởi trạng thái kết thúc.
- */
+/** Yields before returning, so a test can observe Checking before StateFlow conflates it away. */
 private class YieldingVersionRepository(
     private val delegate: FakeVersionRepository
 ) : IVersionRepository {
@@ -59,11 +55,7 @@ private class YieldingVersionRepository(
     ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
 }
 
-/**
- * Bọc [FakeVersionRepository] và `delay()` một khoảng thời gian thật trước khi tải thật sự
- * chạm vào delegate, để test có một cửa sổ đáng tin cậy để can thiệp (ví dụ gọi [check])
- * trong khi lượt tải đang "mồ côi" trên [kotlinx.coroutines.Dispatchers.Default].
- */
+/** Delays before the download reaches the delegate, giving a test a window to call [check] mid-flight. */
 private class DelayedDownloadVersionRepository(
     private val delegate: FakeVersionRepository,
     private val delayMs: Long = 200
@@ -86,27 +78,13 @@ private class DelayedDownloadVersionRepository(
 }
 
 /**
- * Tái hiện đúng lỗi mà B1 đã sửa ở tầng data (`VersionRemoteDataSource`): công việc thật bên
- * trong (`delay` + gọi `delegate`) chạy trong `withContext(NonCancellable)`, nên bị `check()`
- * khác huỷ giữa chừng cũng KHÔNG dừng lại — nó vẫn tự chạy tới cùng theo lịch ảo của chính nó,
- * độc lập với thời điểm bị huỷ, y hệt một cuộc gọi mạng thật đã gửi đi rồi thì huỷ Job phía
- * caller cũng không rút lại được request. Khi `withContext` trả kết quả về cho coroutine cha
- * đã bị huỷ, lần resume đó tự ném `CancellationException` (cancellation "nhanh" tiêu chuẩn của
- * kotlinx.coroutines) — và `catch (e: Exception)` ở đây nuốt luôn ngoại lệ đó, trả về
- * `Result.Error` như một lỗi mạng bình thường thay vì để nó truyền tiếp.
+ * Deliberately non-cooperative, reproducing the data-layer bug B1 fixed: the work runs inside
+ * `withContext(NonCancellable)` and the `catch (e: Exception)` swallows the `CancellationException`
+ * thrown on resume, so a cancelled check still reaches `_state.value` and `scheduleRecheck()`.
+ * That is what lets the tests below exercise the controller's second line of defence.
  *
- * Nhờ vậy, lượt `check()` cũ dù đã bị huỷ vẫn "sống sót" tới tận dòng `_state.value = ...` và
- * `scheduleRecheck()` ở `RequiredUpdateController`, cho bài test bên dưới kiểm chứng lớp
- * phòng vệ thứ hai của controller (`isActive` guard + huỷ `recheckJob` cũ trong
- * `scheduleRecheck()`) — lớp phòng vệ đúng ra không bao giờ cần tới nếu tầng data luôn hợp
- * tác đúng, nhưng vẫn phải đúng ngay cả khi không.
- *
- * [delaysMs] cho một độ trễ riêng theo THỨ TỰ VÀO (không phải thứ tự hoàn tất) của mỗi lần gọi
- * `checkForUpdate` — chỉ số [callIndex] tăng ngay khi lệnh gọi bắt đầu (trước `delay`), nên gán
- * đúng cấu hình cho "chu kỳ cũ" (vào trước) so với "chu kỳ mới" (vào sau) dù độ trễ khác nhau
- * khiến chúng hoàn tất không theo thứ tự đó. [resultsOverride] cho một `Result` khác nhau theo
- * cùng chỉ số đó, để phân biệt danh tính lỗi giữa hai chu kỳ; chỉ số vượt quá kích thước danh
- * sách sẽ rơi về độ trễ/`Result` cuối cùng và [delegate] tương ứng.
+ * [delaysMs] and [resultsOverride] are indexed by call-entry order, not completion order, so a
+ * stale cycle can be configured to finish after a fresh one; indexes past the end reuse the last.
  */
 private class DelayedCheckVersionRepository(
     private val delegate: FakeVersionRepository,
@@ -172,24 +150,14 @@ class RequiredUpdateControllerTest {
         predicate: (RequiredUpdateState) -> Boolean
     ): RequiredUpdateState = withTimeout(5_000) { state.first(predicate) }
 
-    /**
-     * `download()`/`install()` chạy `DownloadUpdateUseCase`/`installUpdate` bên trong
-     * `withContext(Dispatchers.Default)` — công việc thật, không nằm trên `TestDispatcher` của
-     * `runTest`. Timeout ảo của [awaitState] có thể fire ngay lập tức trước khi coroutine đó kịp
-     * trả kết quả, nên các test download/install chờ bằng thời gian thật thay vì thời gian ảo.
-     */
+    /** Download/install hop to `Dispatchers.Default`, which `runTest`'s virtual clock cannot advance. */
     private suspend fun RequiredUpdateController.awaitStateAfterDownloadOrInstall(
         predicate: (RequiredUpdateState) -> Boolean
     ): RequiredUpdateState = withContext(Dispatchers.Default.limitedParallelism(1)) {
         withTimeout(5_000) { state.first(predicate) }
     }
 
-    /**
-     * `install()` chuyển trạng thái sang [UpdateStage.Installing] *trước khi* coroutine thật
-     * gọi `installer.install(file)` trên [Dispatchers.Default], nên riêng việc thấy trạng thái
-     * đó không đảm bảo installer đã được gọi. Poll bằng thời gian thật cho tới khi side effect
-     * thật sự xảy ra.
-     */
+    /** `install()` sets Installing before the installer actually runs, so the state alone proves nothing. */
     private suspend fun awaitCondition(predicate: () -> Boolean) {
         withContext(Dispatchers.Default.limitedParallelism(1)) {
             withTimeout(5_000) {
@@ -198,19 +166,10 @@ class RequiredUpdateControllerTest {
         }
     }
 
-    /**
-     * Cửa sổ chờ cho khẳng định phủ định ("trạng thái này KHÔNG đổi"). Khác với các wait dương
-     * tính ở trên (chờ tới khi điều kiện đúng, kết thúc ngay khi thoả), một wait âm tính không
-     * bao giờ tự kết thúc sớm nếu điều kiện không xảy ra — nên nó phải dùng cửa sổ ngắn, có tên
-     * riêng, thay vì mượn timeout 5000ms vốn dành cho việc chờ một kết quả sẽ tới.
-     */
+    /** Negative assertions never finish early, so they get a short window instead of the 5000ms one. */
     private val STALE_OUTCOME_WINDOW_MS = 300L
 
-    /**
-     * Poll [predicate] bằng thời gian thật trong tối đa [timeoutMs] và trả về liệu nó có bao giờ
-     * đúng hay không, thay vì ném lỗi khi hết giờ — phù hợp cho khẳng định phủ định nơi hết giờ
-     * chính là kết quả mong đợi.
-     */
+    /** Returns whether [predicate] ever held, instead of throwing, since a timeout is the expected result. */
     private suspend fun awaitConditionOrTimeout(
         timeoutMs: Long = STALE_OUTCOME_WINDOW_MS,
         predicate: () -> Boolean
@@ -318,12 +277,7 @@ class RequiredUpdateControllerTest {
         assertTrue(checkingIndex < requiredIndex, "Checking phải xuất hiện trước trạng thái Required: $recordedStates")
     }
 
-    /**
-     * `check()` không chỉ chạy một lần: sau khi ổn định ở `CheckFailed`, controller tự đặt
-     * lịch gọi lại sau `recheckIntervalMs`. `delay()` bên trong chạy trên `controllerScope`,
-     * vốn thừa hưởng dispatcher ảo của `backgroundScope` (cùng `TestCoroutineScheduler` với
-     * `runTest`), nên `advanceTimeBy` đủ để kích hoạt nó — không cần sleep thời gian thật.
-     */
+    /** The re-check `delay()` runs on the test scheduler, so `advanceTimeBy` triggers it without real sleeping. */
     @Test
     fun recheck_after_check_failure_picks_up_update_that_appeared() = runTest(UnconfinedTestDispatcher()) {
         val recheckInterval = 15 * 60 * 1000L
@@ -344,20 +298,10 @@ class RequiredUpdateControllerTest {
     }
 
     /**
-     * `check()` từ `init()` còn dở dang (mắc kẹt tại `delay()` bên trong
-     * [DelayedCheckVersionRepository]) khi ta gọi `check()` lần nữa — mô phỏng "gọi check()
-     * trong khi một lượt check khác đang chạy". Lượt cũ (A, từ `init()`) dùng độ trễ DÀI HƠN
-     * lượt mới (B, từ lệnh gọi `check()` thủ công) — [staleCheckDelayMs] > [freshCheckDelayMs]
-     * — để B ổn định TRƯỚC rồi A mới cố ghi đè lên sau, đúng thứ tự nguy hiểm thật sự: một chu
-     * kỳ cũ trả lời trễ sau khi chu kỳ mới đã chốt trạng thái. A và B cũng trả về hai
-     * [VersionError] khác nhau (qua `resultsOverride`) để có thể khẳng định trạng thái sống
-     * sót bằng chính danh tính lỗi, không chỉ bằng loại (type) của [RequiredUpdateState].
-     *
-     * Lượt cũ dù bị huỷ vẫn tự chạy xong theo lịch ảo riêng của nó (xem KDoc của
-     * [DelayedCheckVersionRepository]) và có thể tự đặt thêm một timer hỏi lại mồ côi nếu
-     * `check()`/`scheduleRecheck()` không tự phòng vệ (`isActive` guard, huỷ `recheckJob` cũ
-     * trước khi gán job mới) — hai timer sống song song sẽ khiến `checkCount` tăng nhanh hơn
-     * tốc độ một-timer-mỗi-`recheckIntervalMs` mong đợi.
+     * The stale cycle (A, from `init()`) gets the LONGER delay so the fresh one (B) settles first
+     * and A then tries to overwrite it — the ordering that actually causes harm. The two return
+     * distinct [VersionError]s so the surviving state is asserted by error identity, not just type.
+     * Without the guards, A's orphaned re-check timer would run alongside B's.
      */
     @Test
     fun check_call_while_check_in_flight_does_not_stack_recheck_timers() = runTest(UnconfinedTestDispatcher()) {
@@ -386,14 +330,12 @@ class RequiredUpdateControllerTest {
             recheckIntervalMs = recheckInterval
         )
 
-        // check() từ init() (chu kỳ A, "cũ") còn "treo" trong delay() ảo bên trong
-        // withContext(NonCancellable), chưa chạm tới repository thật — đây chính là "gọi
-        // check() trong khi một lượt check khác đang chạy".
+        // cycle A is still parked in its delay, so this is a check() during an in-flight check
         assertEquals(0, repository.checkCount)
         sut.check()
         assertEquals(0, repository.checkCount)
 
-        // Chỉ tua đủ để chu kỳ B ("mới", độ trễ ngắn hơn) hoàn tất và chốt trạng thái trước.
+        // advance only far enough for B to settle first
         advanceTimeBy(freshCheckDelayMs + 1)
         runCurrent()
 
@@ -404,8 +346,7 @@ class RequiredUpdateControllerTest {
             "Chu kỳ mới (B) phải chốt trạng thái trước"
         )
 
-        // Giờ mới tua tiếp để chu kỳ A ("cũ") — đã bị huỷ khi B gọi check() — hoàn tất trễ.
-        // isActive guard phải chặn nó ghi đè lên trạng thái B vừa chốt.
+        // now let cancelled cycle A finish late; the isActive guard must stop it overwriting B
         advanceTimeBy(staleCheckDelayMs - freshCheckDelayMs)
         runCurrent()
 
@@ -416,10 +357,7 @@ class RequiredUpdateControllerTest {
             "Chu kỳ cũ (A) hoàn tất trễ không được ghi đè lên trạng thái mà chu kỳ mới (B) đã chốt"
         )
 
-        // Mỗi chu kỳ check() thật kể cả các lần hỏi lại (từ chỉ số 2 trở đi, dùng lại độ trễ
-        // và repository thật do resultsOverride không còn phần tử) đều đi qua freshCheckDelayMs
-        // (độ trễ cuối trong danh sách), nên đệm thêm dư dả để chắc chắn đúng hai lượt hỏi lại
-        // hoàn tất trong cửa sổ đã tua qua.
+        // every re-check also pays freshCheckDelayMs, so pad the window generously
         advanceTimeBy(recheckInterval * 2 + 5_000)
         runCurrent()
 
@@ -432,13 +370,7 @@ class RequiredUpdateControllerTest {
         )
     }
 
-    /**
-     * Pin đúng mối nguy thật sự (không chỉ hiện tượng "hai timer"): chu kỳ mới (B) chốt trạng
-     * thái ở [RequiredUpdateState.Required] — nghĩa là gate đang CHẶN UI — rồi chu kỳ cũ (A,
-     * từ trước khi B chạy, hoàn tất trễ) không được phép ghi đè nó về
-     * [RequiredUpdateState.CheckFailed]. Nếu `isActive` guard trong `check()` bị gỡ, A sẽ ghi
-     * đè `_state` bằng `CheckFailed`, vô tình MỞ gate cho một máy lẽ ra phải bị chặn cập nhật.
-     */
+    /** Without the isActive guard a late stale cycle overwrites Required with CheckFailed, reopening the gate. */
     @Test
     fun stale_check_completing_after_Required_settles_cannot_reopen_gate() = runTest(UnconfinedTestDispatcher()) {
         val staleCheckDelayMs = 1_000L
@@ -468,10 +400,10 @@ class RequiredUpdateControllerTest {
             recheckIntervalMs = 15 * 60 * 1000L
         )
 
-        // Chu kỳ A (từ init()) còn treo; gọi check() thủ công để bắt đầu chu kỳ B chồng lấn.
+        // A is still parked; start an overlapping cycle B
         sut.check()
 
-        // B (độ trễ ngắn hơn) hoàn tất trước, chốt gate ở Required.
+        // B finishes first and settles the gate on Required
         advanceTimeBy(freshCheckDelayMs + 1)
         runCurrent()
 
@@ -480,7 +412,7 @@ class RequiredUpdateControllerTest {
         assertEquals("9.9.9", required.update.version)
         assertEquals(UpdateStage.Ready, required.stage)
 
-        // A hoàn tất trễ; isActive guard phải chặn nó ghi đè Required về CheckFailed.
+        // A finishes late and must not reopen the gate
         advanceTimeBy(staleCheckDelayMs - freshCheckDelayMs)
         runCurrent()
 
@@ -494,7 +426,7 @@ class RequiredUpdateControllerTest {
         assertEquals(UpdateStage.Ready, stateAfterStaleCompletes.stage)
     }
 
-    /** [RequiredUpdateController.close] phải dừng luôn vòng hỏi lại định kỳ, không chỉ chu kỳ hiện tại. */
+    /** [RequiredUpdateController.close] must stop the recurring re-check, not just the current cycle. */
     @Test
     fun close_stops_recheck_loop() = runTest(UnconfinedTestDispatcher()) {
         val recheckInterval = 15 * 60 * 1000L
@@ -798,13 +730,7 @@ class RequiredUpdateControllerTest {
         assertEquals("Cài đặt thất bại", (state.stage as UpdateStage.Failed).message)
     }
 
-    /**
-     * `InstallOutcome` không mang token liên kết với một lần gọi `install()` cụ thể, nên một
-     * outcome trễ từ lượt cài trước có thể đến sau khi controller đã chuyển sang chu kỳ khác.
-     * Test này đưa controller tới [UpdateStage.Failed] (không phải qua platform outcome, mà
-     * qua lỗi cài đặt cục bộ) rồi bắn một `InstallOutcome.Failure` trễ; guard trong
-     * `observeInstallOutcomes()` phải bỏ qua nó vì stage hiện tại không phải [UpdateStage.Installing].
-     */
+    /** A late outcome from an earlier install must be ignored once the stage is no longer Installing. */
     @Test
     fun stale_install_failure_outside_installing_stage_is_ignored() = runTest(UnconfinedTestDispatcher()) {
         val repository = FakeVersionRepository(updates = listOf(testUpdate()))
@@ -822,7 +748,7 @@ class RequiredUpdateControllerTest {
 
         outcomes.emit(InstallOutcome.Failure("Outcome trễ từ lượt cài trước"))
 
-        // Chờ thật một khoảng thời gian để outcome trễ có cơ hội tới collector trước khi assert.
+        // give the late outcome a real chance to reach the collector before asserting
         val staleOverwrote = awaitConditionOrTimeout {
             val state = sut.state.value
             state is RequiredUpdateState.Required &&

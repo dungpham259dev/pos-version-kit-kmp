@@ -10,10 +10,8 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 
 /**
- * Xác thực đồ thị Koin thật (versionKitModule + versionKitDesktopModule) tự resolve được,
- * chứ không chỉ biên dịch. Trước đây branch này từng phát hành một binding sai
- * (`single<IVersionInstaller> { get<VersionInstaller>() }` bị thiếu) mà không test nào bắt
- * được vì Koin chỉ báo lỗi khi thật sự get() một definition tại runtime.
+ * Koin only fails when a definition is actually resolved, so compiling proves nothing about the
+ * graph; this branch shipped a missing `single<IVersionInstaller>` binding that no test caught.
  */
 class VersionKitDesktopModuleTest {
 
@@ -38,8 +36,7 @@ class VersionKitDesktopModuleTest {
             modules(versionKitModule(config) + versionKitDesktopModule())
         }.koin
 
-        // Cả hai đều kéo theo toàn bộ chuỗi phụ thuộc phía sau (api, datasource,
-        // repository, use case, installer) — resolve thành công nghĩa là mọi binding khớp.
+        // both pull the whole chain behind them, so resolving proves every binding lines up
         koin.get<VersionChecker>()
         koin.get<InstallUpdateUseCase>()
     }
