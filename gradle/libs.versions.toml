@@ -9,6 +9,7 @@ coroutines = "1.9.0"
 okio = "3.9.1"
 materialIconsExtended = "1.7.8"
 lifecycleViewmodelKmp = "2.9.1"
+androidxActivityCompose = "1.9.3"
 mavenPublish = "0.30.0"
 compileSdk = "36"
 minSdk = "26"
@@ -32,7 +33,7 @@ koin-android = { module = "io.insert-koin:koin-android", version.ref = "koin" }
 koin-test = { module = "io.insert-koin:koin-test", version.ref = "koin" }
 androidx-material-icons-extended = { module = "androidx.compose.material:material-icons-extended", version.ref = "materialIconsExtended" }
 lifecycle-viewmodel-kmp = { module = "org.jetbrains.androidx.lifecycle:lifecycle-viewmodel", version.ref = "lifecycleViewmodelKmp" }
-androidx-activity-compose = { module = "androidx.activity:activity-compose", version = "1.9.3" }
+androidx-activity-compose = { module = "androidx.activity:activity-compose", version.ref = "androidxActivityCompose" }
 
 [plugins]
 android-library = { id = "com.android.library", version.ref = "agp" }

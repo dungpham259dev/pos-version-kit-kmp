@@ -4,11 +4,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import com.vtcode.pos.version.domain.entity.UpdateInfo
 import com.vtcode.pos.version.presentation.VersionChecker
 import kotlinx.coroutines.CoroutineScope
@@ -61,6 +65,9 @@ interface RequiredUpdateScope {
  *
  * Overlay nuốt toàn bộ chạm và chặn nút back, nên [content] không thao tác được cho tới
  * khi cài xong. Kit không vẽ gì bên trong overlay — [requiredContent] là của host.
+ * Khi bị chặn, overlay còn thu hồi focus khỏi [content], không cho nó nhận focus trở
+ * lại và gỡ nó khỏi cây accessibility, để bàn phím cứng (kể cả máy quét mã vạch giả
+ * lập bàn phím) và trình đọc màn hình không thể chạm tới UI phía sau overlay.
  *
  * @param blockOnCheckFailure chặn luôn khi không hỏi được server. Mặc định `false`
  *   (fail-open): máy POS mất mạng vẫn vào được app.
@@ -77,11 +84,29 @@ fun RequiredUpdateGate(
 ) {
     val state by controller.state.collectAsState()
 
-    content()
-
     val required = state as? RequiredUpdateState.Required
     val blockedByCheckFailure = blockOnCheckFailure && state is RequiredUpdateState.CheckFailed
-    if (required == null && !blockedByCheckFailure) return
+    val blocked = required != null || blockedByCheckFailure
+
+    val focusManager = LocalFocusManager.current
+    LaunchedEffect(blocked) {
+        if (blocked) focusManager.clearFocus(force = true)
+    }
+
+    Box(
+        propagateMinConstraints = true,
+        modifier = if (blocked) {
+            Modifier
+                .focusProperties { canFocus = false }
+                .clearAndSetSemantics {}
+        } else {
+            Modifier
+        }
+    ) {
+        content()
+    }
+
+    if (!blocked) return
 
     BlockSystemBack()
 
