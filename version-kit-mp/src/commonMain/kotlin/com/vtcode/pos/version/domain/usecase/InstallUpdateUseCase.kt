@@ -16,4 +16,6 @@ class InstallUpdateUseCase(
 
     /** Launch the platform flow to grant install permission. See [IVersionInstaller.requestInstallPermission]. */
     fun requestInstallPermission(): Boolean = installer.requestInstallPermission()
+
+    fun canInstallPackages(): Boolean = installer.canInstallPackages()
 }

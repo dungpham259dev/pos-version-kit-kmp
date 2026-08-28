@@ -31,6 +31,7 @@ import okio.Path.Companion.toPath
 import okio.fakefilesystem.FakeFileSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
@@ -639,6 +640,17 @@ class RequiredUpdateControllerTest {
         assertTrue(!becameInstalling, "check() giữa chừng tải không được để lượt tải mồ côi tự động cài đặt")
         assertTrue(installer.installed.isEmpty(), "Installer không được gọi từ lượt tải đã bị check() huỷ bỏ")
         assertEquals(0, repository.downloadCount, "Lượt tải mồ côi phải bị huỷ trước khi chạm tới repository")
+    }
+
+    @Test
+    fun canInstallPackages_reflects_the_platform_installer() = runTest(UnconfinedTestDispatcher()) {
+        val installer = FakeInstaller(canInstall = false)
+        val sut = controller(backgroundScope, FakeVersionRepository(), installer)
+
+        assertFalse(sut.canInstallPackages())
+
+        installer.canInstall = true
+        assertTrue(sut.canInstallPackages())
     }
 
     @Test

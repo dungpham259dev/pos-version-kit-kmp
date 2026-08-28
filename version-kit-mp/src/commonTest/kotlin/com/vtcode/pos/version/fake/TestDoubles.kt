@@ -80,7 +80,8 @@ class FakeVersionRepository(
 
 class FakeInstaller(
     var result: Result<Unit, VersionError> = Result.Success(Unit),
-    var permissionLaunched: Boolean = true
+    var permissionLaunched: Boolean = true,
+    var canInstall: Boolean = true
 ) : IVersionInstaller {
 
     val installed = mutableListOf<Path>()
@@ -95,6 +96,8 @@ class FakeInstaller(
         permissionRequests++
         return permissionLaunched
     }
+
+    override fun canInstallPackages(): Boolean = canInstall
 }
 
 fun testVersionChecker(

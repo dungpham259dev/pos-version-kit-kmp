@@ -8,4 +8,5 @@ import okio.Path
 expect class VersionInstaller : IVersionInstaller {
     override fun install(file: Path): Result<Unit, VersionError>
     override fun requestInstallPermission(): Boolean
+    override fun canInstallPackages(): Boolean
 }

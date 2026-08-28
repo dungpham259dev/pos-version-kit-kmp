@@ -43,4 +43,8 @@ class VersionChecker(
      */
     fun requestInstallPermission(): Boolean =
         installUpdateUseCase.requestInstallPermission()
+
+    /** Whether the platform would currently allow an install, so a host can hide a redundant grant prompt. */
+    fun canInstallPackages(): Boolean =
+        installUpdateUseCase.canInstallPackages()
 }

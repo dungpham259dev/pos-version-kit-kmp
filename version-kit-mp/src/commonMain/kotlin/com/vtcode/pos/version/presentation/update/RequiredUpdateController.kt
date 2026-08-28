@@ -241,6 +241,8 @@ class RequiredUpdateController internal constructor(
 
     fun requestInstallPermission(): Boolean = versionChecker.requestInstallPermission()
 
+    fun canInstallPackages(): Boolean = versionChecker.canInstallPackages()
+
     private fun setStage(stage: UpdateStage) {
         val current = _state.value as? RequiredUpdateState.Required ?: return
         _state.value = current.copy(stage = stage)

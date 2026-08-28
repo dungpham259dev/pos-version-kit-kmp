@@ -22,4 +22,7 @@ actual class VersionInstaller(private val context: Context) : IVersionInstaller 
 
     actual override fun requestInstallPermission(): Boolean =
         ApkInstaller(context).requestInstallPermission()
+
+    actual override fun canInstallPackages(): Boolean =
+        ApkInstaller(context).canInstallPackages()
 }

@@ -58,6 +58,9 @@ interface RequiredUpdateScope {
     fun install()
     fun retry()
     fun requestInstallPermission(): Boolean
+
+    /** Re-queried on each call, so a host can drop the grant prompt after the user returns from settings. */
+    fun canInstallPackages(): Boolean
 }
 
 /**
@@ -141,5 +144,6 @@ private fun rememberRequiredUpdateScope(
         override fun install() = controller.install()
         override fun retry() = controller.retry()
         override fun requestInstallPermission() = controller.requestInstallPermission()
+        override fun canInstallPackages() = controller.canInstallPackages()
     }
 }

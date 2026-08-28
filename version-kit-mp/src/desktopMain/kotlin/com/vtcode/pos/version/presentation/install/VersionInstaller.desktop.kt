@@ -29,4 +29,6 @@ actual class VersionInstaller : IVersionInstaller {
 
     // Desktop installs do not require a runtime "unknown sources" permission.
     actual override fun requestInstallPermission(): Boolean = true
+
+    actual override fun canInstallPackages(): Boolean = true
 }

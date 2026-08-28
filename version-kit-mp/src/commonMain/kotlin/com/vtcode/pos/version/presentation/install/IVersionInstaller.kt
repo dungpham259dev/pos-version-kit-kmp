@@ -10,4 +10,7 @@ interface IVersionInstaller {
 
     /** Returns true if a request flow was launched; platforms needing no permission return true. */
     fun requestInstallPermission(): Boolean
+
+    /** Whether the platform would currently allow an install; platforms needing no permission return true. */
+    fun canInstallPackages(): Boolean
 }
