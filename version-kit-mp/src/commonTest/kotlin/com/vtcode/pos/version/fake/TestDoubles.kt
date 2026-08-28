@@ -2,6 +2,7 @@ package com.vtcode.pos.version.fake
 
 import com.vtcode.pos.version.di.VersionKitConfig
 import com.vtcode.pos.version.domain.entity.UpdateInfo
+import com.vtcode.pos.version.domain.entity.downloadTargetPath
 import com.vtcode.pos.version.domain.error.Result
 import com.vtcode.pos.version.domain.error.VersionError
 import com.vtcode.pos.version.domain.repository.IVersionRepository
@@ -65,7 +66,7 @@ class FakeVersionRepository(
         downloadError?.let { return Result.Error(it) }
         onProgress(50, 100L, 50L)
         fileSystem.createDirectories(destinationDir)
-        val file = destinationDir / "update_$fileId"
+        val file = downloadTargetPath(fileId, destinationDir)
         fileSystem.write(file) {
             if (writeCorruptFile) {
                 write("<html>error</html>".encodeToByteArray())

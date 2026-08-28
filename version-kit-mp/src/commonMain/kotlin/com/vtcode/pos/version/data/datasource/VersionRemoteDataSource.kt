@@ -2,6 +2,7 @@ package com.vtcode.pos.version.data.datasource
 
 import com.vtcode.pos.version.data.api.VersionApi
 import com.vtcode.pos.version.data.model.VersionData
+import com.vtcode.pos.version.domain.entity.downloadTargetPath
 import com.vtcode.pos.version.domain.error.Result
 import com.vtcode.pos.version.domain.error.VersionError
 import io.ktor.client.HttpClient
@@ -46,8 +47,7 @@ internal class VersionRemoteDataSource(
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> {
         if (fileId.isBlank()) return Result.Error(VersionError.UnknownError("Invalid fileId"))
-        val safe = fileId.replace(Regex("[^A-Za-z0-9_-]"), "_")
-        val target = destinationDir / "update_$safe"
+        val target = downloadTargetPath(fileId, destinationDir)
         return try {
             fileSystem.createDirectories(destinationDir)
             val base = baseUrl.trimEnd('/')

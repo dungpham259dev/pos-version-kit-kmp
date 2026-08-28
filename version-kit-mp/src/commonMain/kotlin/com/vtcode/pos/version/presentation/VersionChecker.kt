@@ -34,6 +34,13 @@ class VersionChecker(
     ): Result<Path, VersionError> =
         downloadUpdateUseCase(updateInfo, destinationDir, fileSystem, tracker)
 
+    /** A previously downloaded, still-valid installer for [updateInfo], or null. */
+    fun existingDownload(
+        updateInfo: UpdateInfo,
+        destinationDir: Path,
+        fileSystem: FileSystem = FileSystem.SYSTEM
+    ): Path? = downloadUpdateUseCase.existingDownload(updateInfo, destinationDir, fileSystem)
+
     fun installUpdate(file: Path, onComplete: () -> Unit = {}): Result<Unit, VersionError> =
         installUpdateUseCase(file, onComplete)
 

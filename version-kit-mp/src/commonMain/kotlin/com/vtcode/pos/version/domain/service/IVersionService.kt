@@ -9,4 +9,7 @@ interface IVersionService {
     fun shouldPresentUpdate(updateInfo: UpdateInfo, currentVersion: String): Boolean
     /** Validate a downloaded file is a real APK/installer (ZIP magic), not an error body. */
     fun isDownloadComplete(updateInfo: UpdateInfo, file: Path, fileSystem: FileSystem): Boolean
+
+    /** A previously downloaded, still-valid installer for [updateInfo], or null. */
+    fun existingDownload(updateInfo: UpdateInfo, destinationDir: Path, fileSystem: FileSystem): Path?
 }

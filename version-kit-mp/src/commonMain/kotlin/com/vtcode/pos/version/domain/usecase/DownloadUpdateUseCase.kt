@@ -42,6 +42,13 @@ class DownloadUpdateUseCase(
      * @param tracker Progress tracker for this download operation
      * @return Result containing the downloaded [Path], or VersionError
      */
+    /** A previously downloaded, still-valid installer, so a restart need not re-download. */
+    fun existingDownload(
+        updateInfo: UpdateInfo,
+        destinationDir: Path,
+        fileSystem: FileSystem
+    ): Path? = versionService.existingDownload(updateInfo, destinationDir, fileSystem)
+
     suspend operator fun invoke(
         updateInfo: UpdateInfo,
         destinationDir: Path,

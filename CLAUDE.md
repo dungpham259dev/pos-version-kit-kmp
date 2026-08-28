@@ -169,6 +169,19 @@ Android gọi `androidx.activity.compose.BackHandler(enabled = true) {}` (phụ 
 `build.gradle.kts`, vì đây là chi tiết cài đặt, không lộ ra public API). Actual Desktop
 là no-op vì desktop không có nút back hệ thống.
 
+`check()` cũng nhặt lại file đã tải: nếu `cacheDir` còn một installer hợp lệ cho đúng bản bắt
+buộc đó (`VersionService.existingDownload`, kiểm bằng ZIP magic như mọi chỗ khác), controller vào
+thẳng `UpdateStage.Downloaded` thay vì `Ready`. Cần thiết vì trên Android việc cấp quyền "cài ứng
+dụng không xác định" thường giết process — không có bước này thì user cấp quyền xong quay lại phải
+tải lại toàn bộ APK. Nó **không** tự cài: bung dialog hệ thống ngay lúc app vừa khởi động là việc
+user không hề yêu cầu. Đường dẫn file do `downloadTargetPath()` (`domain/entity/DownloadTarget.kt`)
+quyết định — một định nghĩa duy nhất, dùng chung bởi cả nơi ghi (`VersionRemoteDataSource`) lẫn nơi
+tìm lại, nên đừng tự nội suy tên file ở chỗ khác.
+
+`VersionChecker.canInstallPackages()` / `RequiredUpdateScope.canInstallPackages()` cho host hỏi
+quyền cài đặt hiện có hay không, để ẩn nút "Cấp quyền" sau khi user đã cấp trong Settings. Query
+lại mỗi lần gọi, nên host cần tự kích hoạt recomposition khi app resume.
+
 ### Server contract
 
 Backend is the Rasa version-management server. Two endpoints, both under the configured `baseUrl`:

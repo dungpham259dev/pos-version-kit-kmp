@@ -1,5 +1,6 @@
 package com.vtcode.pos.version.presentation.update
 
+import com.vtcode.pos.version.domain.entity.UpdateInfo
 import com.vtcode.pos.version.domain.entity.requiredUpdate
 import com.vtcode.pos.version.domain.error.Result
 import com.vtcode.pos.version.domain.error.VersionError
@@ -135,7 +136,7 @@ class RequiredUpdateController internal constructor(
                     _state.value = if (required == null) {
                         RequiredUpdateState.NotRequired
                     } else {
-                        RequiredUpdateState.Required(required, UpdateStage.Ready)
+                        RequiredUpdateState.Required(required, resumeStageFor(required))
                     }
                 }
 
@@ -161,6 +162,18 @@ class RequiredUpdateController internal constructor(
             recheckJob = null
             check()
         }
+    }
+
+    /**
+     * Picks up an installer already sitting in [cacheDir] instead of downloading it again — granting
+     * Android's install permission can kill the process, and the user should not pay for the APK twice.
+     * Deliberately does not auto-install: firing the system dialog straight off a cold start is not
+     * something the user asked for here.
+     */
+    private fun resumeStageFor(update: UpdateInfo): UpdateStage {
+        val existing = versionChecker.existingDownload(update, cacheDir, fileSystem) ?: return UpdateStage.Ready
+        lastDownloadedFile = existing
+        return UpdateStage.Downloaded(existing)
     }
 
     /** No-op unless the stage is [UpdateStage.Ready] or [UpdateStage.Failed]. */

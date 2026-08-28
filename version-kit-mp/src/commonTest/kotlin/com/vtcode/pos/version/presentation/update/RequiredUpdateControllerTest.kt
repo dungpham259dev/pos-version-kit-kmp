@@ -2,6 +2,7 @@ package com.vtcode.pos.version.presentation.update
 
 import com.vtcode.pos.version.domain.entity.UpdateInfo
 import com.vtcode.pos.version.domain.error.Result
+import com.vtcode.pos.version.domain.entity.downloadTargetPath
 import com.vtcode.pos.version.domain.error.VersionError
 import com.vtcode.pos.version.domain.repository.IVersionRepository
 import com.vtcode.pos.version.fake.FakeInstaller
@@ -640,6 +641,44 @@ class RequiredUpdateControllerTest {
         assertTrue(!becameInstalling, "check() giữa chừng tải không được để lượt tải mồ côi tự động cài đặt")
         assertTrue(installer.installed.isEmpty(), "Installer không được gọi từ lượt tải đã bị check() huỷ bỏ")
         assertEquals(0, repository.downloadCount, "Lượt tải mồ côi phải bị huỷ trước khi chạm tới repository")
+    }
+
+    @Test
+    fun existing_valid_download_resumes_at_Downloaded_without_downloading_again() = runTest(UnconfinedTestDispatcher()) {
+        val update = testUpdate(version = "2.0.0", fileId = "file-1")
+        val repository = FakeVersionRepository(updates = listOf(update))
+        val installer = FakeInstaller()
+        val fileSystem = FakeFileSystem()
+        fileSystem.createDirectories(cacheDir)
+        val alreadyThere = downloadTargetPath("file-1", cacheDir)
+        fileSystem.write(alreadyThere) { write(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) }
+
+        val sut = controller(backgroundScope, repository, installer, fileSystem)
+
+        val state = sut.awaitState { it is RequiredUpdateState.Required }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals(UpdateStage.Downloaded(alreadyThere), state.stage)
+        assertEquals(0, repository.downloadCount)
+        assertTrue(installer.installed.isEmpty(), "a cold start must not fire the installer on its own")
+
+        sut.install()
+        awaitCondition { installer.installed.isNotEmpty() }
+        assertEquals(listOf(alreadyThere), installer.installed)
+        assertEquals(0, repository.downloadCount)
+    }
+
+    @Test
+    fun corrupt_cached_file_is_ignored_and_download_still_runs() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate(fileId = "file-1")))
+        val fileSystem = FakeFileSystem()
+        fileSystem.createDirectories(cacheDir)
+        fileSystem.write(downloadTargetPath("file-1", cacheDir)) { write("<html>nope</html>".encodeToByteArray()) }
+
+        val sut = controller(backgroundScope, repository, FakeInstaller(), fileSystem)
+
+        val state = sut.awaitState { it is RequiredUpdateState.Required }
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals(UpdateStage.Ready, state.stage)
     }
 
     @Test
