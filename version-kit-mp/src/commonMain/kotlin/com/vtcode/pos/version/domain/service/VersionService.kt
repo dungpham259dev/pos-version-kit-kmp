@@ -1,6 +1,7 @@
 package com.vtcode.pos.version.domain.service
 
 import com.vtcode.pos.version.domain.entity.UpdateInfo
+import com.vtcode.pos.version.domain.entity.downloadTargetPath
 import com.vtcode.pos.version.domain.entity.compareVersions as compareSemver
 import okio.FileSystem
 import okio.Path
@@ -14,6 +15,16 @@ class VersionService : IVersionService {
         if (!updateInfo.hasUpdate) return false
         if (!updateInfo.isDownloadable) return false
         return compareVersions(updateInfo.version, currentVersion) > 0
+    }
+
+    override fun existingDownload(
+        updateInfo: UpdateInfo,
+        destinationDir: Path,
+        fileSystem: FileSystem
+    ): Path? {
+        if (updateInfo.fileId.isBlank()) return null
+        val target = downloadTargetPath(updateInfo.fileId, destinationDir)
+        return target.takeIf { isDownloadComplete(updateInfo, it, fileSystem) }
     }
 
     // Validate by content not server size: an APK/MSI(zip) starts with PK\x03\x04.

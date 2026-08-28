@@ -220,3 +220,22 @@ RequiredUpdateGate(
     requiredContent = { scope -> MyForcedUpdateScreen(scope) },
 ) { AppNavHost() }
 ```
+
+## Điều chỉnh sau khi implement (2026-08-27)
+
+Code thật khác spec ở các điểm sau; code là nguồn sự thật, giữ mục này để đọc spec không bị lạc.
+
+- `blockOnCheckFailure: Boolean` bị bỏ. Thay bằng `checkFailedContent: (@Composable () -> Unit)? = null`:
+  truyền UI là opt-in chặn, `null` là fail-open. Lý do: bật cờ mà quên slot sẽ tạo overlay trong
+  suốt chặn hết chạm/back/focus — trên máy POS trông như treo máy.
+- Controller không launch trên `scope` host truyền vào mà tạo child scope; `close()` chỉ huỷ child.
+  Scope **phải** main-confined (`viewModelScope` đạt) — state của controller không thread-safe.
+- Thêm `recheckIntervalMs: Long? = 15 phút`. Fail-open mà không hỏi lại là mở vĩnh viễn; chỉ hỏi
+  lại khi state là `NotRequired`/`CheckFailed`, không bao giờ khi `Required`.
+- `check()` huỷ luôn download đang chạy, tránh download mồ côi tự kích install ở chu kỳ mới.
+- `install()` có guard chống gọi lặp khi đang `Installing`.
+- Outcome cài đặt từ nền tảng chỉ được áp khi đang chờ cài (cả hai controller), vì
+  `InstallEventBus` toàn tiến trình không có token liên kết với lượt cài.
+- `BackHandler` không có ở commonMain (CMP 1.9.0) → `internal expect/actual BlockSystemBack()`.
+- Overlay chặn cả focus/bàn phím/accessibility, không chỉ chạm — máy quét mã vạch là bàn phím.
+- `VersionRemoteDataSource` rethrow `CancellationException` thay vì nuốt vào `NetworkError`.

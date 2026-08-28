@@ -401,7 +401,23 @@ class InstallUpdateUseCase(
 ) {
 ```
 
-Phần thân giữ nguyên. Koin không phải sửa: `single { InstallUpdateUseCase(get()) }` trong `versionKitModule()` vẫn resolve `VersionInstaller` do platform module cung cấp, và `VersionInstaller` giờ là một `IVersionInstaller`.
+Phần thân giữ nguyên.
+
+Koin **phải** sửa. `single { VersionInstaller(...) }` chỉ đăng ký định nghĩa dưới type cụ thể `VersionInstaller`; `InstallUpdateUseCase(get())` giờ suy ra `get<IVersionInstaller>()` và sẽ ném `NoDefinitionFoundException` lúc chạy. Thêm binding vào **cả hai** module platform:
+
+```kotlin
+// VersionKitAndroidModule.kt
+single { VersionInstaller(androidContext()) }
+single<IVersionInstaller> { get<VersionInstaller>() }
+```
+
+```kotlin
+// VersionKitDesktopModule.kt
+single { VersionInstaller() }
+single<IVersionInstaller> { get<VersionInstaller>() }
+```
+
+Thêm `import com.vtcode.pos.version.presentation.install.IVersionInstaller` vào cả hai file. Không test nào hiện dựng Koin container, nên build xanh **không** chứng minh chỗ này đúng.
 
 - [ ] **Step 5: Build cả hai target**
 
@@ -845,6 +861,13 @@ git commit -m "feat: add RequiredUpdateController with check flow"
 ---
 
 ### Task 6: Luồng download và auto-install
+
+> **Điều chỉnh sau review Task 5:** controller không còn `launch` trực tiếp trên `scope`
+> host truyền vào. Nó tự dựng một child scope (`controllerScope`) và `close()` chỉ huỷ
+> child đó. Mọi `scope.launch { ... }` trong đoạn code của Task 6 và Task 7 dưới đây phải
+> đọc là `controllerScope.launch { ... }` — dùng đúng tên thuộc tính có trong file sau
+> Task 5. `check()` cũng đã giữ `checkJob` và huỷ job cũ trước khi chạy job mới.
+
 
 **Files:**
 - Modify: `version-kit-mp/src/commonMain/kotlin/com/vtcode/pos/version/presentation/update/RequiredUpdateController.kt`

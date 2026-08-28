@@ -24,20 +24,22 @@ kotlin {
     sourceSets {
         val commonMain by getting {
             dependencies {
-                implementation(libs.kotlinx.coroutines.core)
+                // `api` for types that appear in the public API surface, so consumers
+                // (ipos / kpos) get them on their compile classpath transitively.
+                api(libs.kotlinx.coroutines.core)     // StateFlow<DownloadProgress>
+                api(libs.okio)                        // Path / FileSystem in public signatures
+                api(libs.koin.core)                   // Module return type of versionKitModule()
+                api(compose.runtime)                  // @Composable
+                api(compose.foundation)
+                api(compose.material3)
+                api(compose.materialIconsExtended)
+                api(compose.ui)                       // Modifier
+                // Internal implementation details — not exposed in any public signature.
                 implementation(libs.kotlinx.serialization.json)
-                implementation(libs.okio)
-                implementation(libs.koin.core)
                 implementation(libs.ktor.client.core)
                 implementation(libs.ktor.client.content.negotiation)
                 implementation(libs.ktor.serialization.kotlinx.json)
                 implementation(libs.ktor.client.logging)
-                implementation(libs.lifecycle.viewmodel.kmp)
-                implementation(compose.runtime)
-                implementation(compose.foundation)
-                implementation(compose.material3)
-                implementation(compose.materialIconsExtended)
-                implementation(compose.ui)
             }
         }
         val commonTest by getting {
@@ -51,13 +53,21 @@ kotlin {
         val androidMain by getting {
             dependencies {
                 implementation(libs.ktor.client.okhttp)
-                implementation(libs.koin.android)
+                api(libs.koin.android)
+                implementation(libs.androidx.activity.compose)
             }
         }
         val desktopMain by getting {
             dependencies {
                 implementation(libs.ktor.client.cio)
                 implementation(libs.kotlinx.coroutines.swing)
+            }
+        }
+        val desktopTest by getting {
+            dependencies {
+                // koin-test is only used to build/verify the real Koin graph on the JVM
+                // target (see VersionKitDesktopModuleTest) — test-only, never api/implementation.
+                implementation(libs.koin.test)
             }
         }
     }

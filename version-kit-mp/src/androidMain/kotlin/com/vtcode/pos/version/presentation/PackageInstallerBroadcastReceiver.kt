@@ -10,7 +10,7 @@ import android.util.Log
  * Broadcast receiver for PackageInstaller session callbacks.
  * Handles install completion and restart app.
  */
-class PackageInstallerBroadcastReceiver : BroadcastReceiver() {
+internal class PackageInstallerBroadcastReceiver : BroadcastReceiver() {
 
     companion object {
         private const val TAG = "ApkInstaller"
@@ -37,8 +37,17 @@ class PackageInstallerBroadcastReceiver : BroadcastReceiver() {
                     @Suppress("DEPRECATION")
                     intent.getParcelableExtra<Intent>(Intent.EXTRA_INTENT)
                 }
-                confirmIntent?.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                context.startActivity(confirmIntent)
+                if (confirmIntent != null) {
+                    confirmIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    context.startActivity(confirmIntent)
+                } else {
+                    // No confirmation intent supplied — the install can never proceed,
+                    // so surface it instead of leaving the UI waiting forever.
+                    if (DEBUG) Log.e(TAG, "STATUS_PENDING_USER_ACTION without EXTRA_INTENT")
+                    InstallEventBus.emit(
+                        InstallEvent.Failure("Không mở được hộp thoại cài đặt")
+                    )
+                }
             }
             PackageInstaller.STATUS_SUCCESS -> {
                 if (DEBUG) Log.i(TAG, "Installation successful!")
@@ -58,6 +67,14 @@ class PackageInstallerBroadcastReceiver : BroadcastReceiver() {
                 val message = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                 if (DEBUG) Log.e(TAG, "Installation failed: $message")
                 InstallEventBus.emit(InstallEvent.Failure(message))
+            }
+
+            // an unrecognised status would otherwise leave the UI waiting forever
+            else -> {
+                Log.w(TAG, "Unhandled install status: $status")
+                InstallEventBus.emit(
+                    InstallEvent.Failure(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+                )
             }
         }
     }

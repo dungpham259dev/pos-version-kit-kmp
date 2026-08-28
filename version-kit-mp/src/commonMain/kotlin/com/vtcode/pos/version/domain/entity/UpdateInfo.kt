@@ -19,7 +19,8 @@ data class UpdateInfo(
     val fileSize: String,
     val isDownloadable: Boolean,
     val releaseNote: String?,
-    val description: String?
+    val description: String?,
+    val isRequired: Boolean = false
 ) {
     /**
      * Gets the file size in bytes as a Long.

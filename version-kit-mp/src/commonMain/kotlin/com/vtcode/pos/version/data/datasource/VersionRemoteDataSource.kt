@@ -2,15 +2,19 @@ package com.vtcode.pos.version.data.datasource
 
 import com.vtcode.pos.version.data.api.VersionApi
 import com.vtcode.pos.version.data.model.VersionData
+import com.vtcode.pos.version.domain.entity.downloadTargetPath
 import com.vtcode.pos.version.domain.error.Result
 import com.vtcode.pos.version.domain.error.VersionError
 import io.ktor.client.HttpClient
 import io.ktor.client.plugins.HttpRequestTimeoutException
+import io.ktor.client.plugins.HttpTimeoutConfig
 import io.ktor.client.plugins.ResponseException
+import io.ktor.client.plugins.timeout
 import io.ktor.client.request.prepareGet
 import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.contentLength
 import io.ktor.utils.io.readAvailable
+import kotlinx.coroutines.CancellationException
 import okio.FileSystem
 import okio.Path
 import okio.buffer
@@ -26,6 +30,8 @@ internal class VersionRemoteDataSource(
         val response = api.getStableVersion(softwareCode, currentVersion)
         val list = response.data?.mapNotNull { VersionData.fromResponseItem(it) } ?: emptyList()
         Result.Success(list)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: HttpRequestTimeoutException) {
         Result.Error(VersionError.TimeoutError)
     } catch (e: ResponseException) {
@@ -41,12 +47,19 @@ internal class VersionRemoteDataSource(
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> {
         if (fileId.isBlank()) return Result.Error(VersionError.UnknownError("Invalid fileId"))
-        val safe = fileId.replace(Regex("[^A-Za-z0-9_-]"), "_")
-        val target = destinationDir / "update_$safe"
+        val target = downloadTargetPath(fileId, destinationDir)
         return try {
             fileSystem.createDirectories(destinationDir)
             val base = baseUrl.trimEnd('/')
-            client.prepareGet("$base/api/upload/download/$fileId").execute { response ->
+            client.prepareGet("$base/api/upload/download/$fileId") {
+                // The shared client caps requestTimeout at 60s, which would abort any
+                // large APK/installer download. Lift the overall cap for downloads and
+                // rely on socketTimeout to catch a genuinely stalled connection.
+                timeout {
+                    requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+                    socketTimeoutMillis = 60_000
+                }
+            }.execute { response ->
                 val total = response.contentLength() ?: -1L
                 var downloaded = 0L
                 val channel = response.bodyAsChannel()
@@ -61,8 +74,17 @@ internal class VersionRemoteDataSource(
                         onProgress(pct, total, downloaded)
                     }
                 }
+                // Guard against a silently truncated response: if the server advertised a
+                // size but closed the stream early (no exception), the saved APK is corrupt.
+                // Fail loudly instead of handing a broken file to the installer.
+                if (total > 0 && downloaded != total) {
+                    error("Tải xuống không đầy đủ: $downloaded/$total byte")
+                }
             }
             Result.Success(target)
+        } catch (e: CancellationException) {
+            if (fileSystem.exists(target)) fileSystem.delete(target)
+            throw e
         } catch (e: HttpRequestTimeoutException) {
             if (fileSystem.exists(target)) fileSystem.delete(target)
             Result.Error(VersionError.TimeoutError)

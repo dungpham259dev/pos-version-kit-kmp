@@ -5,6 +5,8 @@ import com.vtcode.pos.version.domain.error.VersionError
 import okio.Path
 
 /** Platform installer: Android = PackageInstaller, Desktop = launch .msi/.exe then exit. */
-expect class VersionInstaller {
-    fun install(file: Path): Result<Unit, VersionError>
+expect class VersionInstaller : IVersionInstaller {
+    override fun install(file: Path): Result<Unit, VersionError>
+    override fun requestInstallPermission(): Boolean
+    override fun canInstallPackages(): Boolean
 }

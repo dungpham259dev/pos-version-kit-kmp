@@ -34,6 +34,24 @@ class VersionChecker(
     ): Result<Path, VersionError> =
         downloadUpdateUseCase(updateInfo, destinationDir, fileSystem, tracker)
 
+    /** A previously downloaded, still-valid installer for [updateInfo], or null. */
+    fun existingDownload(
+        updateInfo: UpdateInfo,
+        destinationDir: Path,
+        fileSystem: FileSystem = FileSystem.SYSTEM
+    ): Path? = downloadUpdateUseCase.existingDownload(updateInfo, destinationDir, fileSystem)
+
     fun installUpdate(file: Path, onComplete: () -> Unit = {}): Result<Unit, VersionError> =
         installUpdateUseCase(file, onComplete)
+
+    /**
+     * Launch the platform flow to grant install permission (Android opens the
+     * "install unknown apps" settings). No-op returning `true` where unneeded (Desktop).
+     */
+    fun requestInstallPermission(): Boolean =
+        installUpdateUseCase.requestInstallPermission()
+
+    /** Whether the platform would currently allow an install, so a host can hide a redundant grant prompt. */
+    fun canInstallPackages(): Boolean =
+        installUpdateUseCase.canInstallPackages()
 }
