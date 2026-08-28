@@ -682,6 +682,37 @@ class RequiredUpdateControllerTest {
     }
 
     @Test
+    fun returning_to_foreground_while_Installing_frees_a_stranded_install() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate(fileId = "file-1")))
+        val installer = FakeInstaller()
+        val fileSystem = FakeFileSystem()
+        val sut = controller(backgroundScope, repository, installer, fileSystem)
+        sut.awaitState { it is RequiredUpdateState.Required }
+        sut.download()
+        sut.awaitStateAfterDownloadOrInstall {
+            it is RequiredUpdateState.Required && it.stage is UpdateStage.Installing
+        }
+
+        // the platform never reports a terminal outcome; coming back must not leave the gate stuck
+        sut.onAppForegrounded()
+
+        val state = sut.state.value
+        assertIs<RequiredUpdateState.Required>(state)
+        assertEquals(UpdateStage.Downloaded(downloadTargetPath("file-1", cacheDir)), state.stage)
+    }
+
+    @Test
+    fun returning_to_foreground_outside_Installing_changes_nothing() = runTest(UnconfinedTestDispatcher()) {
+        val repository = FakeVersionRepository(updates = listOf(testUpdate()))
+        val sut = controller(backgroundScope, repository)
+        val before = sut.awaitState { it is RequiredUpdateState.Required }
+
+        sut.onAppForegrounded()
+
+        assertEquals(before, sut.state.value)
+    }
+
+    @Test
     fun canInstallPackages_reflects_the_platform_installer() = runTest(UnconfinedTestDispatcher()) {
         val installer = FakeInstaller(canInstall = false)
         val sut = controller(backgroundScope, FakeVersionRepository(), installer)

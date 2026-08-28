@@ -256,6 +256,22 @@ class RequiredUpdateController internal constructor(
 
     fun canInstallPackages(): Boolean = versionChecker.canInstallPackages()
 
+    /**
+     * Call when the app returns to the foreground.
+     *
+     * A successful self-install kills the process, so still being alive at [UpdateStage.Installing]
+     * means the install did not happen. Not every device delivers a terminal PackageInstaller
+     * broadcast when the user dismisses the system dialog, and without this the gate would sit on
+     * [UpdateStage.Installing] forever — on a POS terminal, with back blocked, that is a device
+     * bricked short of a force-stop.
+     */
+    fun onAppForegrounded() {
+        val current = _state.value as? RequiredUpdateState.Required ?: return
+        if (current.stage !is UpdateStage.Installing) return
+        val file = lastDownloadedFile
+        setStage(if (file != null) UpdateStage.Downloaded(file) else UpdateStage.Ready)
+    }
+
     private fun setStage(stage: UpdateStage) {
         val current = _state.value as? RequiredUpdateState.Required ?: return
         _state.value = current.copy(stage = stage)

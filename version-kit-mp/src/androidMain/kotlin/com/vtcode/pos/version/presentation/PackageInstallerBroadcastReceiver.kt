@@ -68,6 +68,14 @@ internal class PackageInstallerBroadcastReceiver : BroadcastReceiver() {
                 if (DEBUG) Log.e(TAG, "Installation failed: $message")
                 InstallEventBus.emit(InstallEvent.Failure(message))
             }
+
+            // an unrecognised status would otherwise leave the UI waiting forever
+            else -> {
+                Log.w(TAG, "Unhandled install status: $status")
+                InstallEventBus.emit(
+                    InstallEvent.Failure(intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE))
+                )
+            }
         }
     }
 }

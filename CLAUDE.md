@@ -178,6 +178,14 @@ user không hề yêu cầu. Đường dẫn file do `downloadTargetPath()` (`do
 quyết định — một định nghĩa duy nhất, dùng chung bởi cả nơi ghi (`VersionRemoteDataSource`) lẫn nơi
 tìm lại, nên đừng tự nội suy tên file ở chỗ khác.
 
+`RequiredUpdateController.onAppForegrounded()` **phải** được host gọi khi app quay lại foreground.
+Cài thành công thì hệ thống giết process, nên còn sống mà vẫn ở `UpdateStage.Installing` nghĩa là
+việc cài đã không xảy ra. Không phải máy nào cũng gửi broadcast kết thúc khi user đóng dialog cài
+đặt hệ thống — thiếu hook này thì gate treo vĩnh viễn ở `Installing`, mà gate chặn cả nút back, tức
+là máy POS đơ hẳn cho tới khi force-stop. Đây là lối thoát duy nhất không dựa vào broadcast, đừng gỡ.
+Receiver cũng có nhánh `else` phát `Failure` cho mọi status lạ (ví dụ `STATUS_FAILURE_TIMEOUT` của
+API 34+) vì cùng lý do.
+
 `VersionChecker.canInstallPackages()` / `RequiredUpdateScope.canInstallPackages()` cho host hỏi
 quyền cài đặt hiện có hay không, để ẩn nút "Cấp quyền" sau khi user đã cấp trong Settings. Query
 lại mỗi lần gọi, nên host cần tự kích hoạt recomposition khi app resume.
