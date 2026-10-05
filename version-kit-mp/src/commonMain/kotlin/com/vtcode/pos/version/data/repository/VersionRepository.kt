@@ -20,8 +20,8 @@ internal class VersionRepository(
         }
 
     override suspend fun downloadFileWithProgress(
-        fileId: String, destinationDir: Path, fileSystem: FileSystem,
+        fileId: String, serverFilePath: String, destinationDir: Path, fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> =
-        remote.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
+        remote.downloadFileWithProgress(fileId, serverFilePath, destinationDir, fileSystem, onProgress)
 }

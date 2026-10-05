@@ -66,7 +66,7 @@ Two, both under `presentation/install/`:
 
 | expect (commonMain) | Android actual | Desktop actual |
 |---|---|---|
-| `class VersionInstaller` | `PackageInstaller` session, falls back to `ACTION_VIEW` + FileProvider | `ProcessBuilder` launches `.msi`/`.exe`, then `exitProcess(0)` |
+| `class VersionInstaller` | `PackageInstaller` session, falls back to `ACTION_VIEW` + FileProvider | `.msi` on Windows: detached PowerShell (`WindowsMsiInstall`) waits for the app to exit, runs `msiexec /passive /norestart /l*v <msi>.log`, then relaunches `jpackage.app-path`; other files via `cmd /c start`. Then `exitProcess(0)` |
 | `val platformInstallOutcomes: Flow<InstallOutcome>` | bridges `InstallEventBus` (fed by the broadcast receiver) | empty flow (install is terminal — process exits) |
 
 `-Xexpect-actual-classes` is enabled to allow `expect class VersionInstaller`.
@@ -81,9 +81,13 @@ The library's own `AndroidManifest.xml` declares `REQUEST_INSTALL_PACKAGES`, the
 
 Two independent guards, both deliberate — don't remove them:
 1. `VersionRemoteDataSource` lifts the shared 60s `requestTimeoutMillis` to `INFINITE_TIMEOUT_MS` per-download (a large APK would otherwise abort) and relies on `socketTimeoutMillis` for stalls; it then fails if `downloaded != contentLength` (silent truncation).
-2. `VersionService.isDownloadComplete()` validates by **content, not server-reported size** — an APK/MSI must start with the ZIP magic `PK\x03\x04`. This catches HTTP-200 error bodies saved as `.apk`. `DownloadUpdateUseCase` deletes the file and fails if this check doesn't pass.
+2. `VersionService.isDownloadComplete()` validates by **content, not server-reported size** — the file must start with a known installer signature: ZIP `PK\x03\x04` (`.apk`), OLE compound file `D0 CF 11 E0 A1 B1 1A E1` (`.msi` — **not** a ZIP), or PE `MZ` (`.exe`). This catches HTTP-200 error bodies saved as installers. Add a signature there before shipping a new installer format, or every download of it fails as "Downloaded file is invalid or incomplete". `DownloadUpdateUseCase` deletes the file and fails if this check doesn't pass.
 
-Downloads write to `destinationDir / "update_<sanitized fileId>"` and the host passes the cache dir in.
+Downloads write to `destinationDir / "update_<sanitized fileId>.<ext>"`, where `<ext>` comes from the server `file_path` — Windows picks the installer handler by extension, and the desktop installer only uses `msiexec` for `.msi`. The host passes the cache dir in.
+
+### Desktop (Windows) install
+
+`WindowsMsiInstall` passes its script via `-EncodedCommand` (UTF-16) on purpose: cmd/batch breaks on non-ASCII profile paths such as `C:\Users\Dũng Phạm`. It relaunches the app whatever the msiexec exit code, so a cancelled UAC prompt never leaves a POS with nothing running. The MSIs are per-machine (`ALLUSERS=1`), so the UAC prompt is expected. In-place upgrade depends on the host's MSI `UpgradeCode` never changing — ipos/kpos pin `upgradeUuid` in `desktopApp/build.gradle.kts`.
 
 ### UI layer
 
@@ -170,7 +174,7 @@ Android gọi `androidx.activity.compose.BackHandler(enabled = true) {}` (phụ 
 là no-op vì desktop không có nút back hệ thống.
 
 `check()` cũng nhặt lại file đã tải: nếu `cacheDir` còn một installer hợp lệ cho đúng bản bắt
-buộc đó (`VersionService.existingDownload`, kiểm bằng ZIP magic như mọi chỗ khác), controller vào
+buộc đó (`VersionService.existingDownload`, kiểm bằng installer signature như mọi chỗ khác), controller vào
 thẳng `UpdateStage.Downloaded` thay vì `Ready`. Cần thiết vì trên Android việc cấp quyền "cài ứng
 dụng không xác định" thường giết process — không có bước này thì user cấp quyền xong quay lại phải
 tải lại toàn bộ APK. Nó **không** tự cài: bung dialog hệ thống ngay lúc app vừa khởi động là việc

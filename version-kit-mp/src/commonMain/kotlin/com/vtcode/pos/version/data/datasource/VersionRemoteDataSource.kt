@@ -42,12 +42,13 @@ internal class VersionRemoteDataSource(
 
     override suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> {
         if (fileId.isBlank()) return Result.Error(VersionError.UnknownError("Invalid fileId"))
-        val target = downloadTargetPath(fileId, destinationDir)
+        val target = downloadTargetPath(fileId, serverFilePath, destinationDir)
         return try {
             fileSystem.createDirectories(destinationDir)
             val base = baseUrl.trimEnd('/')

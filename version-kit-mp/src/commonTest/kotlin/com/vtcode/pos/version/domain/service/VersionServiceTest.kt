@@ -28,6 +28,20 @@ class VersionServiceTest {
         fs.write(p) { write(byteArrayOf(0x50, 0x4B, 0x03, 0x04, 0x00)) }
         assertTrue(svc.isDownloadComplete(update(), p, fs))
     }
+    @Test fun msi_compound_file_is_complete() {
+        val fs = FakeFileSystem()
+        val p = "update.msi".toPath()
+        fs.write(p) {
+            write(byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte(), 0x00))
+        }
+        assertTrue(svc.isDownloadComplete(update(), p, fs))
+    }
+    @Test fun windows_executable_is_complete() {
+        val fs = FakeFileSystem()
+        val p = "update.exe".toPath()
+        fs.write(p) { write(byteArrayOf(0x4D, 0x5A, 0x90.toByte(), 0x00)) }
+        assertTrue(svc.isDownloadComplete(update(), p, fs))
+    }
     @Test fun non_zip_file_is_incomplete() {
         val fs = FakeFileSystem()
         val p = "error.html".toPath()

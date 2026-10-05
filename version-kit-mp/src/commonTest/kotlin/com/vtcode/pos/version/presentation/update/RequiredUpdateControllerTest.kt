@@ -51,10 +51,11 @@ private class YieldingVersionRepository(
 
     override suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
-    ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
+    ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, serverFilePath, destinationDir, fileSystem, onProgress)
 }
 
 /** Delays before the download reaches the delegate, giving a test a window to call [check] mid-flight. */
@@ -70,12 +71,13 @@ private class DelayedDownloadVersionRepository(
 
     override suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> {
         delay(delayMs)
-        return delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
+        return delegate.downloadFileWithProgress(fileId, serverFilePath, destinationDir, fileSystem, onProgress)
     }
 }
 
@@ -115,10 +117,11 @@ private class DelayedCheckVersionRepository(
 
     override suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
-    ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, destinationDir, fileSystem, onProgress)
+    ): Result<Path, VersionError> = delegate.downloadFileWithProgress(fileId, serverFilePath, destinationDir, fileSystem, onProgress)
 }
 
 class RequiredUpdateControllerTest {
@@ -650,7 +653,7 @@ class RequiredUpdateControllerTest {
         val installer = FakeInstaller()
         val fileSystem = FakeFileSystem()
         fileSystem.createDirectories(cacheDir)
-        val alreadyThere = downloadTargetPath("file-1", cacheDir)
+        val alreadyThere = downloadTargetPath("file-1", "", cacheDir)
         fileSystem.write(alreadyThere) { write(byteArrayOf(0x50, 0x4B, 0x03, 0x04)) }
 
         val sut = controller(backgroundScope, repository, installer, fileSystem)
@@ -672,7 +675,7 @@ class RequiredUpdateControllerTest {
         val repository = FakeVersionRepository(updates = listOf(testUpdate(fileId = "file-1")))
         val fileSystem = FakeFileSystem()
         fileSystem.createDirectories(cacheDir)
-        fileSystem.write(downloadTargetPath("file-1", cacheDir)) { write("<html>nope</html>".encodeToByteArray()) }
+        fileSystem.write(downloadTargetPath("file-1", "", cacheDir)) { write("<html>nope</html>".encodeToByteArray()) }
 
         val sut = controller(backgroundScope, repository, FakeInstaller(), fileSystem)
 
@@ -698,7 +701,7 @@ class RequiredUpdateControllerTest {
 
         val state = sut.state.value
         assertIs<RequiredUpdateState.Required>(state)
-        assertEquals(UpdateStage.Downloaded(downloadTargetPath("file-1", cacheDir)), state.stage)
+        assertEquals(UpdateStage.Downloaded(downloadTargetPath("file-1", "", cacheDir)), state.stage)
     }
 
     @Test

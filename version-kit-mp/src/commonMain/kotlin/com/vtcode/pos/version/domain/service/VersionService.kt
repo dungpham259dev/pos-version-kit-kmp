@@ -23,30 +23,38 @@ class VersionService : IVersionService {
         fileSystem: FileSystem
     ): Path? {
         if (updateInfo.fileId.isBlank()) return null
-        val target = downloadTargetPath(updateInfo.fileId, destinationDir)
+        val target = downloadTargetPath(updateInfo.fileId, updateInfo.filePath, destinationDir)
         return target.takeIf { isDownloadComplete(updateInfo, it, fileSystem) }
     }
 
-    // Validate by content not server size: an APK/MSI(zip) starts with PK\x03\x04.
-    // Catches HTTP-200 error bodies saved as files.
+    // Validate by content not server size; catches HTTP-200 error bodies saved as files.
     override fun isDownloadComplete(updateInfo: UpdateInfo, file: Path, fileSystem: FileSystem): Boolean {
         if (!fileSystem.exists(file)) return false
         val meta = fileSystem.metadataOrNull(file) ?: return false
         if ((meta.size ?: 0L) == 0L) return false
-        return isZipFile(file, fileSystem)
+        return hasInstallerSignature(file, fileSystem)
     }
 
-    private fun isZipFile(file: Path, fileSystem: FileSystem): Boolean = try {
+    private fun hasInstallerSignature(file: Path, fileSystem: FileSystem): Boolean = try {
         fileSystem.read(file) {
-            val header = ByteArray(4)
-            val read = read(header)
-            read == 4 &&
-                header[0] == 0x50.toByte() &&
-                header[1] == 0x4B.toByte() &&
-                header[2] == 0x03.toByte() &&
-                header[3] == 0x04.toByte()
+            val header = ByteArray(INSTALLER_SIGNATURES.maxOf { it.size })
+            val read = read(header).coerceAtLeast(0)
+            INSTALLER_SIGNATURES.any { signature ->
+                read >= signature.size && signature.indices.all { header[it] == signature[it] }
+            }
         }
     } catch (e: Exception) {
         false
+    }
+
+    private companion object {
+        val INSTALLER_SIGNATURES: List<ByteArray> = listOf(
+            // ZIP: .apk
+            byteArrayOf(0x50, 0x4B, 0x03, 0x04),
+            // OLE compound file: .msi
+            byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte(), 0xA1.toByte(), 0xB1.toByte(), 0x1A, 0xE1.toByte()),
+            // PE "MZ": .exe
+            byteArrayOf(0x4D, 0x5A),
+        )
     }
 }

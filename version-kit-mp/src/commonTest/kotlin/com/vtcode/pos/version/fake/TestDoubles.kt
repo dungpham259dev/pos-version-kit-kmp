@@ -58,6 +58,7 @@ class FakeVersionRepository(
 
     override suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (Int, Long, Long) -> Unit
@@ -66,7 +67,7 @@ class FakeVersionRepository(
         downloadError?.let { return Result.Error(it) }
         onProgress(50, 100L, 50L)
         fileSystem.createDirectories(destinationDir)
-        val file = downloadTargetPath(fileId, destinationDir)
+        val file = downloadTargetPath(fileId, serverFilePath, destinationDir)
         fileSystem.write(file) {
             if (writeCorruptFile) {
                 write("<html>error</html>".encodeToByteArray())

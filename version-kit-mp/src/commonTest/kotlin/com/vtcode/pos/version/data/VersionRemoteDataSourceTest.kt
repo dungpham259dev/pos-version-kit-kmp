@@ -10,6 +10,8 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
 import io.ktor.http.HttpHeaders
 import kotlinx.coroutines.test.runTest
+import okio.Path.Companion.toPath
+import okio.fakefilesystem.FakeFileSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -27,5 +29,21 @@ class VersionRemoteDataSourceTest {
         val r = ds.checkForUpdate("ipos", "1.0.0")
         assertTrue(r is Result.Success)
         assertEquals("2.0.0", (r as Result.Success).value.first().version)
+    }
+
+    @Test fun download_keeps_server_extension() = runTest {
+        val msiHeader = byteArrayOf(0xD0.toByte(), 0xCF.toByte(), 0x11, 0xE0.toByte())
+        val engine = MockEngine { respond(msiHeader, HttpStatusCode.OK,
+            headersOf(HttpHeaders.ContentLength, msiHeader.size.toString())) }
+        val client = createHttpClient(engine)
+        val ds = VersionRemoteDataSource(VersionApi(client, "http://x"), client, "http://x")
+        val fs = FakeFileSystem()
+        val dir = "/cache".toPath()
+
+        val r = ds.downloadFileWithProgress("abc", "upload/ipos-desktop/ipos-desktop-1.0.13.msi", dir, fs) { _, _, _ -> }
+
+        assertTrue(r is Result.Success)
+        assertEquals(dir / "update_abc.msi", (r as Result.Success).value)
+        assertTrue(fs.exists(dir / "update_abc.msi"))
     }
 }

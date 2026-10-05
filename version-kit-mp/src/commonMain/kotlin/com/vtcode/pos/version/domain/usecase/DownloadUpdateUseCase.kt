@@ -60,6 +60,7 @@ class DownloadUpdateUseCase(
         val result = try {
             repository.downloadFileWithProgress(
                 fileId = updateInfo.fileId,
+                serverFilePath = updateInfo.filePath,
                 destinationDir = destinationDir,
                 fileSystem = fileSystem,
                 onProgress = { percentage, total, downloaded ->

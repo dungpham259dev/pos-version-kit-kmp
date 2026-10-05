@@ -10,6 +10,7 @@ interface IVersionRemoteDataSource {
     suspend fun checkForUpdate(softwareCode: String, currentVersion: String): Result<List<VersionData>, VersionError>
     suspend fun downloadFileWithProgress(
         fileId: String,
+        serverFilePath: String,
         destinationDir: Path,
         fileSystem: FileSystem,
         onProgress: (percentage: Int, totalBytes: Long, downloadedBytes: Long) -> Unit
