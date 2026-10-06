@@ -46,6 +46,7 @@ class FakeVersionRepository(
 
     var checkCount = 0
     var downloadCount = 0
+    var lastServerFilePath: String? = null
 
     override suspend fun checkForUpdate(
         softwareCode: String,
@@ -64,6 +65,7 @@ class FakeVersionRepository(
         onProgress: (Int, Long, Long) -> Unit
     ): Result<Path, VersionError> {
         downloadCount++
+        lastServerFilePath = serverFilePath
         downloadError?.let { return Result.Error(it) }
         onProgress(50, 100L, 50L)
         fileSystem.createDirectories(destinationDir)

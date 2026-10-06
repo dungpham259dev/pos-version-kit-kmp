@@ -165,6 +165,9 @@ internal class VersionListController(
     // Last APK handed to the installer — used to retry after an install failure.
     private var lastInstallFile: Path? = null
 
+    // Server entries behind the listed items, so a download never works from a lossy copy.
+    private var listedUpdates: Map<String, UpdateInfo> = emptyMap()
+
     init {
         checkForUpdates()
         observeInstallOutcomes()
@@ -222,6 +225,7 @@ internal class VersionListController(
                         ensureMinRefreshDelay(startMark)
                     }
 
+                    listedUpdates = updates.associateBy { it.fileId }
                     if (updates.isEmpty()) {
                         _uiState.value = VersionListUiState.UpToDate
                     } else {
@@ -265,6 +269,10 @@ internal class VersionListController(
     /** Cancels the controller's scope; called from the composable's onDispose. */
     fun cancelScope() {
         scope.cancel()
+    }
+
+    fun downloadItem(item: VersionListItemState) {
+        listedUpdates[item.fileId]?.let(::downloadUpdate)
     }
 
     fun downloadUpdate(update: UpdateInfo) {
@@ -470,24 +478,8 @@ fun VersionListSection(
     val downloadingVersion = combinedState.downloadingVersion
     val installingFile = combinedState.installingFile
 
-    val onDownloadCallback = remember(resolvedSoftwareCode) {
-        { item: VersionListItemState ->
-            val updateInfo = UpdateInfo(
-                hasUpdate = true,
-                versionId = "",
-                version = item.version,
-                releaseDate = "",
-                softwareName = resolvedSoftwareCode,
-                platform = "android",
-                fileId = item.fileId,
-                filePath = "",
-                fileSize = item.fileSizeBytes.toString(),
-                isDownloadable = true,
-                releaseNote = item.releaseNote,
-                description = null
-            )
-            controller.downloadUpdate(updateInfo)
-        }
+    val onDownloadCallback = remember(controller) {
+        { item: VersionListItemState -> controller.downloadItem(item) }
     }
 
     val onInstallCallback = remember(controller) {

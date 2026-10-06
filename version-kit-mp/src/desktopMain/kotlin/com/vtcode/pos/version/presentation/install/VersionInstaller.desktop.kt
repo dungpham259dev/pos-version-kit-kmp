@@ -14,7 +14,7 @@ actual class VersionInstaller : IVersionInstaller {
         val installer = File(file.toString())
         if (!installer.exists()) return Result.Error(VersionError.FileNotFound(installer.absolutePath))
         return try {
-            ProcessBuilder(launchCommand(installer)).start()
+            processBuilder(installer).start()
             exitProcess(0)
             @Suppress("UNREACHABLE_CODE") Result.Success(Unit)
         } catch (e: Exception) {
@@ -22,20 +22,33 @@ actual class VersionInstaller : IVersionInstaller {
         }
     }
 
-    private fun launchCommand(installer: File): List<String> {
+    private fun processBuilder(installer: File): ProcessBuilder {
         val isWindows = System.getProperty("os.name").lowercase().contains("win")
         return when {
-            isWindows && installer.name.endsWith(".msi", ignoreCase = true) -> {
+            isWindows && WindowsMsiInstall.isMsi(installer) -> {
                 val script = WindowsMsiInstall.script(
                     msiPath = installer.absolutePath,
-                    parentPid = ProcessHandle.current().pid(),
+                    waitPids = appProcessIds(),
                     relaunchPath = System.getProperty(JPACKAGE_APP_PATH)?.takeIf { File(it).isFile },
                 )
-                WindowsMsiInstall.command(script)
+                // Pipes to an exited parent break on the first write; a file keeps the updater alive and debuggable.
+                ProcessBuilder(WindowsMsiInstall.command(script))
+                    .redirectInput(ProcessBuilder.Redirect.from(File("NUL")))
+                    .redirectErrorStream(true)
+                    .redirectOutput(ProcessBuilder.Redirect.appendTo(File("${installer.absolutePath}.updater.log")))
             }
-            isWindows -> listOf("cmd", "/c", "start", "", installer.absolutePath)
-            else -> listOf(installer.absolutePath)
+            isWindows -> ProcessBuilder("cmd", "/c", "start", "", installer.absolutePath)
+            else -> ProcessBuilder(installer.absolutePath)
         }
+    }
+
+    // jpackage's Windows launcher re-spawns itself and runs the JVM in the child; the parent holds the .exe too.
+    private fun appProcessIds(): List<Long> {
+        val current = ProcessHandle.current()
+        val command = current.info().command().orElse(null)
+        val launcherParent = current.parent()
+            .filter { command != null && it.info().command().orElse(null) == command }
+        return listOfNotNull(current.pid(), launcherParent.map { it.pid() }.orElse(null))
     }
 
     // Desktop installs do not require a runtime "unknown sources" permission.
